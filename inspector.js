@@ -1,4 +1,5 @@
 // Copyright 2026 Alper Donmez. All rights reserved.
+// inspector.js v0.1.0
 
 (() => {
   if (customElements.get("fm-inspector")) return;
@@ -61,6 +62,29 @@
     .fab:hover { color: var(--accent); }
     .fab svg { inline-size: 16px; block-size: 16px; }
     :host([open]) .fab { display: none; }
+    /* the pill's dismiss badge: shows on hover, removes the inspector until the next page load */
+    .bye {
+      position: absolute;
+      inset-block-start: -6px;
+      inset-inline-end: -6px;
+      display: inline-flex;
+      align-items: center;
+      justify-content: center;
+      inline-size: 22px;
+      block-size: 22px;
+      color: var(--muted);
+      background: var(--bg);
+      border: 1px solid var(--border);
+      border-radius: 999px;
+      box-shadow: 0 2px 8px rgba(0, 0, 0, 0.12);
+      opacity: 0;
+      transition: opacity 120ms;
+    }
+    .bye svg { inline-size: 12px; block-size: 12px; }
+    .bye:hover { color: var(--text); background: var(--bg-2); }
+    :host(:hover) .bye, .bye:focus-visible { opacity: 1; }
+    :host([open]) .bye, :host([dragging]) .bye { display: none; }
+    @media (hover: none) { .bye { opacity: 1; inline-size: 26px; block-size: 26px; } }
 
     .panel {
       position: relative; /* paints over the overlay */
@@ -262,6 +286,7 @@
   const MARKUP = `
     <div class="ov" aria-hidden="true"></div>
     <button class="fab" type="button" aria-expanded="false" aria-controls="panel">${ICON_CODE}Show code</button>
+    <button class="bye" type="button" aria-label="Remove the code inspector" title="Remove until the next page load">${ICON_X}</button>
     <section class="panel" id="panel" aria-label="Code">
       <div class="head">
         <div role="tablist" aria-label="Code views">
@@ -439,6 +464,7 @@
       root.append(tpl.content);
       const $ = (s) => root.querySelector(s);
       this.fab = $(".fab");
+      this.byeBtn = $(".bye");
       this.panel = $(".panel");
       this.head = $(".head");
       this.closeBtn = $(".close");
@@ -460,6 +486,7 @@
 
       this.fab.addEventListener("click", () => this.toggle(true));
       this.closeBtn.addEventListener("click", () => this.toggle(false));
+      this.byeBtn.addEventListener("click", () => this.dismiss());
       this.tabs.forEach((t) => t.addEventListener("click", () => { this.fold(false); this.show(t.id === "tab-css" ? "css" : "html"); }));
       // A click on the head's bare surface folds the panel down to the head, and back
       this.head.addEventListener("click", (e) => { if (!e.target.closest("button")) this.fold(!this.hasAttribute("folded")); });
@@ -480,8 +507,10 @@
       this.draggable(this.head);
       this.draggable(this.fab);
       root.querySelectorAll(".rz").forEach((h) => this.resizable(h));
-      addEventListener("resize", () => { this.fit(); this.paint(); });
-      new ResizeObserver(() => { this.fit(); this.paint(); }).observe(this.panel); // the panel grows as its views load
+      this.onResize = () => { this.fit(); this.paint(); };
+      addEventListener("resize", this.onResize);
+      this.panelRo = new ResizeObserver(this.onResize);
+      this.panelRo.observe(this.panel); // the panel grows as its views load
       addEventListener("scroll", this.onMove, { capture: true, passive: true });
       this.show("html");
     }
@@ -602,6 +631,16 @@
       this.toggleAttribute("folded", on);
       this.fit();
       this.paint();
+    }
+
+    dismiss() {
+      // Puts the page's CSS back, drops every listener and leaves; the next page load mounts a fresh inspector
+      this.reset();
+      this.ro.disconnect();
+      this.panelRo.disconnect();
+      removeEventListener("resize", this.onResize);
+      removeEventListener("scroll", this.onMove, { capture: true });
+      this.remove();
     }
 
     toggle(open) {
@@ -780,12 +819,8 @@
     }
 
     paintModel(el, chrome) {
-      const { r, p, m, b } = this.geometry(el);
-      const all = { t: 1, r: 1, b: 1, l: 1 };
-      const pos = { t: Math.max(m.t, 0), r: Math.max(m.r, 0), b: Math.max(m.b, 0), l: Math.max(m.l, 0) };
-      if (pos.t || pos.r || pos.b || pos.l) this.ring("mr", this.outer(r, pos), pos, all, "mv");
-      this.box("ct", r.left + b.l + p.l, r.top + b.t + p.t, r.width - b.l - b.r - p.l - p.r, r.height - b.t - b.b - p.t - p.b);
-      this.ring("pd", { left: r.left + b.l, top: r.top + b.t, right: r.right - b.r, bottom: r.bottom - b.b, width: r.width - b.l - b.r, height: r.height - b.t - b.b }, p, all, "pv");
+      // A picked element gets its outline, the measure lines and its name only; no fills, no padding/margin bands
+      const r = el.getBoundingClientRect();
       this.box("box", r.left, r.top, r.width, r.height);
       // The element name sits in the top-left corner over the width line (inside the box near the top of the page)
       const above = r.top >= 36;
