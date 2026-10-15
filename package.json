@@ -1,0 +1,15 @@
+{
+  "name": "frontendmentorsolutions-demos",
+  "version": "0.1.76",
+  "private": true,
+  "description": "The demo pages of frontendmentorsolutions.io and the code inspector they load. inspector.js is BUILT from src/ by build.mjs; never edit it by hand.",
+  "type": "module",
+  "scripts": {
+    "build": "node build.mjs",
+    "test:unit": "node --test 'test/*.test.mjs'",
+    "check": "node --check inspector.js"
+  },
+  "devDependencies": {
+    "esbuild": "0.28.2"
+  }
+}

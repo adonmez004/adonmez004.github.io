@@ -1,0 +1,392 @@
+  :host {
+    --bg: light-dark(#ffffff, #161b26);
+    --bg-2: light-dark(#f3f4f6, #0f1219);
+    --border: light-dark(#e5e7eb, #2a3140);
+    --text: light-dark(#1f2430, #e5e7eb);
+    --muted: light-dark(#6b7280, #9aa3b2);
+    --accent: light-dark(#2563eb, #60a5fa);
+    --wash: color-mix(in srgb, var(--accent) 12%, transparent);
+    --tag: light-dark(#2563eb, #7cb3ff);
+    --attr: light-dark(#7c3aed, #b794f6);
+    --val: light-dark(#2563eb, #7cb3ff);
+    --flex: light-dark(#b45309, #fbbf24);
+    /* the selection palette: one cool hue per picked element, cycling; orange and green stay margin/padding */
+    --pick-0: #1d4ed8;
+    --pick-1: #0284c7;
+    --pick-2: #0d9488;
+    --pick-3: #4f46e5;
+    --pick-4: #7c3aed;
+    --mar: rgba(245, 158, 11, 0.14);
+    --mar-ink: #d97706;
+    --pad: rgba(34, 197, 94, 0.16);
+    --pad-ink: #16a34a;
+    --bord: rgba(234, 179, 8, 0.28);
+    --bord-ink: #ca8a04;
+    --dist: #dc2626;
+    --css: light-dark(#c026d3, #e879f9); /* a hovered or pinned declaration, on the page and in its row: a family apart from the picks' blues */
+    --chip: light-dark(#1f2430, #ffffff);
+    --chip-text: light-dark(#ffffff, #1f2430);
+    --chip-name: light-dark(#93c5fd, #2563eb);
+    --font: system-ui, -apple-system, "Segoe UI", Roboto, sans-serif;
+    --mono: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+    --shadow: 0 12px 40px rgba(0, 0, 0, 0.18);
+    color-scheme: light dark;
+    position: fixed;
+    inset-block-start: auto;
+    inset-inline-start: auto;
+    inset-block-end: 16px;
+    inset-inline-end: 16px;
+    z-index: 2147483000;
+    display: block;
+    font-family: var(--font);
+    font-size: 14px;
+    line-height: 1.5;
+    color: var(--text);
+  }
+  :host([theme="light"]) { color-scheme: light; }
+  :host([theme="dark"]) { color-scheme: dark; }
+  * { box-sizing: border-box; margin: 0; padding: 0; }
+  button { font: inherit; color: inherit; background: none; border: 0; cursor: pointer; touch-action: manipulation; }
+  button:focus-visible, input:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+
+  .launcher { position: relative; display: inline-flex; z-index: 2; }
+  :host([open]) .launcher { display: none; }
+  .fab {
+    position: relative;
+    display: inline-flex;
+    align-items: center;
+    gap: 8px;
+    min-block-size: 44px;
+    padding: 0 16px;
+    font-weight: 600;
+    background: var(--bg);
+    border: 1px solid var(--border);
+    border-radius: 999px;
+    box-shadow: var(--shadow);
+    touch-action: none;
+    user-select: none;
+  }
+  .fab:hover { color: var(--accent); }
+  :host([open]) .fab { display: none; }
+  /* the pill's dismiss badge: shows on hover, removes the inspector until the next page load */
+  .bye {
+    position: absolute;
+    inset-block-start: -6px;
+    inset-inline-end: -6px;
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    inline-size: 22px;
+    block-size: 22px;
+    color: var(--muted);
+    background: var(--bg);
+    border: 1px solid var(--border);
+    border-radius: 999px;
+    box-shadow: 0 2px 8px rgba(0, 0, 0, 0.12);
+    opacity: 0;
+    transition: opacity 120ms;
+  }
+  .bye svg { inline-size: 12px; block-size: 12px; }
+  .bye:hover { color: var(--text); background: var(--bg-2); }
+  :host(:hover) .bye, .bye:focus-visible { opacity: 1; }
+  :host([open]) .bye, :host([dragging]) .bye { display: none; }
+  @media (hover: none) { .bye { opacity: 1; inline-size: 26px; block-size: 26px; } }
+
+  .panel {
+    position: relative; /* paints over the overlay */
+    z-index: 2;
+    display: none;
+    flex-direction: column;
+    inline-size: min(23rem, calc(100vw - 16px));
+    block-size: min(70vh, 40rem); /* one height on both tabs; the user's own resize overrides it */
+    background: var(--bg);
+    border: 1px solid var(--border);
+    border-radius: 14px;
+    box-shadow: var(--shadow);
+    overflow: hidden;
+  }
+  :host([open]) .panel { display: flex; }
+
+  .head {
+    display: flex;
+    align-items: center;
+    gap: 2px;
+    flex: none; /* never squeezed by the body */
+    block-size: 33px; /* a 32px bar plus the 1px rule under it (border-box) */
+    padding: 0 8px 0 6px;
+    border-block-end: 1px solid var(--border);
+    cursor: grab;
+    touch-action: none;
+    user-select: none;
+  }
+  :host([dragging]) .head, :host([dragging]) .fab { cursor: grabbing; }
+  /* folded: only the head stands, in place */
+  :host([folded]) .body, :host([folded]) .status, :host([folded]) .rz { display: none; }
+  :host([folded]) .panel { block-size: auto !important; }
+  :host([folded]) .head { border-block-end: 0; }
+
+  /* resize handles: thin strips along the panel's edges and squares on its corners, straddling the border */
+  .rz { position: absolute; display: none; touch-action: none; z-index: 3; }
+  :host([open]:not([folded])) .rz { display: block; } /* no resize while folded to the head */
+  .rz.n, .rz.s { inset-inline: 10px; block-size: 12px; cursor: ns-resize; }
+  .rz.e, .rz.w { inset-block: 10px; inline-size: 12px; cursor: ew-resize; }
+  .rz.n { inset-block-start: -6px; }
+  .rz.s { inset-block-end: -6px; }
+  .rz.e { inset-inline-end: -6px; }
+  .rz.w { inset-inline-start: -6px; }
+  .rz.ne, .rz.nw, .rz.se, .rz.sw { inline-size: 18px; block-size: 18px; }
+  .rz.ne { inset-block-start: -7px; inset-inline-end: -7px; cursor: nesw-resize; }
+  .rz.sw { inset-block-end: -7px; inset-inline-start: -7px; cursor: nesw-resize; }
+  .rz.nw { inset-block-start: -7px; inset-inline-start: -7px; cursor: nwse-resize; }
+  .rz.se { inset-block-end: -7px; inset-inline-end: -7px; cursor: nwse-resize; }
+  :host([resizing]) * { user-select: none; }
+
+  /* the element picker: Chrome's select-an-element button, left of the tabs */
+  .pickbtn { inline-size: 24px; block-size: 24px; display: inline-flex; align-items: center; justify-content: center; color: var(--muted); border-radius: 8px; margin-inline-end: 4px; }
+  .pickbtn:hover { color: var(--text); background: var(--bg-2); }
+  .pickbtn[aria-pressed="true"] { color: var(--accent); background: var(--wash); }
+  .pickbtn svg { inline-size: 16px; block-size: 16px; }
+  .sizebtn { inline-size: 24px; block-size: 24px; display: inline-flex; align-items: center; justify-content: center; color: var(--muted); border-radius: 8px; margin-inline-start: 2px; }
+  .sizebtn:hover { color: var(--text); background: var(--bg-2); }
+  .sizebtn[aria-pressed="true"] { color: var(--accent); background: var(--wash); }
+  .sizebtn svg { inline-size: 16px; block-size: 16px; }
+  /* the resize tool's own small bar at the top centre of the page: the chosen element's size, undo the last resize, that element back, every resized element back */
+  .sizetools { position: fixed; inset-block-start: 8px; inset-inline-start: 50%; transform: translateX(-50%); z-index: 2; display: none; align-items: center; gap: 2px; padding: 3px 3px 3px 10px; font-family: var(--mono); font-size: 11px; color: var(--text); background: var(--bg); border: 1px solid var(--border); border-radius: 999px; box-shadow: var(--shadow); white-space: nowrap; }
+  :host([sizing]) .sizetools { display: inline-flex; }
+  .sizetools { max-inline-size: calc(100vw - 16px); }
+  .sizetools .wval { color: var(--accent); font-weight: 700; margin-inline-end: 6px; min-inline-size: 0; max-inline-size: min(300px, 30vw); overflow: hidden; text-overflow: ellipsis; }
+  .sizetools .wval:empty::before { content: "Click an element"; color: var(--muted); font-weight: 400; }
+  .wblock { position: absolute; inline-size: 1px; block-size: 1px; overflow: hidden; clip-path: inset(50%); white-space: nowrap; } /* the reason a resize was held, for assistive tech only: on screen the held row's red in the CSS tab says it (the badge left on Alper's call) */
+  /* the declaration that kept a resize from landing: a red row, its name and value in red */
+  .d.block { background: color-mix(in srgb, var(--dist) 14%, transparent); box-shadow: inset 3px 0 0 var(--dist), inset 0 0 0 1px color-mix(in srgb, var(--dist) 50%, transparent); }
+  .d.block .t, .d.block .v, .d.block .x { color: var(--dist); font-weight: 700; }
+  .grp:has(.d.block) .gh .sel { color: var(--dist); }
+  .sundo { inline-size: 22px; block-size: 22px; display: inline-flex; align-items: center; justify-content: center; color: var(--muted); border-radius: 999px; }
+  .sundo svg { inline-size: 14px; block-size: 14px; }
+  .sundo:hover, .sreset:hover { color: var(--text); background: var(--bg-2); }
+  .sundo:disabled { opacity: 0.35; cursor: default; background: none; }
+  .sreset, .rreset { block-size: 22px; padding: 0 8px; font-size: 11px; font-weight: 600; color: var(--muted); border-radius: 999px; }
+  .rreset:hover { color: var(--text); background: var(--bg-2); }
+  .hd { position: fixed; z-index: 2; display: none; inline-size: 32px; block-size: 32px; margin: -16px 0 0 -16px; padding: 0; background: transparent; border: 0; border-radius: 4px; cursor: ew-resize; touch-action: none; } /* a button: Left/Right arrows step the width */
+  .hd::after { content: ""; position: absolute; inset: 8px; background: var(--accent); border: 2px solid #fff; border-radius: 4px; box-shadow: 0 1px 4px rgba(0, 0, 0, 0.3); }
+  .hd:disabled { cursor: not-allowed; opacity: 0.5; }
+  :host([sizing]) .hd[data-on] { display: block; }
+  /* beside the handle, once the element has been resized: this element back to its own size */
+  .hreset { position: fixed; z-index: 2; display: none; block-size: 20px; padding: 0 7px; font-family: var(--mono); font-size: 10px; font-weight: 600; color: var(--muted); background: var(--bg); border: 1px solid var(--border); border-radius: 999px; box-shadow: 0 1px 4px rgba(0, 0, 0, 0.18); }
+  .hreset:hover { color: var(--text); background: var(--bg-2); }
+  :host([sizing]) .hreset[data-on] { display: inline-flex; align-items: center; }
+  .measure { inline-size: 24px; block-size: 24px; display: inline-flex; align-items: center; justify-content: center; color: var(--muted); border-radius: 8px; margin-inline-start: 4px; }
+  .measure:hover { color: var(--text); background: var(--bg-2); }
+  .measure[aria-pressed="true"] { color: var(--accent); background: var(--wash); }
+  .measure svg { inline-size: 16px; block-size: 16px; }
+  [role="tablist"] { display: flex; flex: none; } /* the tabs stay on one line however narrow the panel gets */
+  .head > * { flex: none; }
+  .tab {
+    block-size: 32px;
+    padding: 0 8px;
+    font-size: 14px;
+    font-weight: 600;
+    color: var(--muted);
+    border-block-end: 2px solid transparent;
+    margin-block-end: -1px;
+  }
+  .tab:hover { color: var(--text); }
+  .tab[aria-selected="true"] { color: var(--text); border-color: var(--accent); }
+  .spacer { flex: 1 1 0; min-inline-size: 0; }
+  .theme { inline-size: 24px; block-size: 24px; display: inline-flex; align-items: center; justify-content: center; color: var(--muted); border-radius: 8px; }
+  .theme:hover { color: var(--text); background: var(--bg-2); }
+  .status { padding: 4px 12px; font-size: 12px; color: var(--dist); white-space: normal; }
+  .status:empty { display: none; }
+  .theme svg { inline-size: 16px; block-size: 16px; }
+  .theme .sun { display: none; }
+  :host([theme="dark"]) .theme .sun { display: block; }
+  :host([theme="dark"]) .theme .moon { display: none; }
+  @media (prefers-color-scheme: dark) {
+    :host(:not([theme])) .theme .sun { display: block; }
+    :host(:not([theme])) .theme .moon { display: none; }
+  }
+  .undo { inline-size: 24px; block-size: 24px; display: inline-flex; align-items: center; justify-content: center; color: var(--muted); border-radius: 8px; }
+  .undo:hover { color: var(--text); background: var(--bg-2); }
+  .undo:disabled { opacity: 0.35; cursor: default; background: none; }
+  .undo svg { inline-size: 16px; block-size: 16px; }
+  .reset { block-size: 22px; padding: 0 8px; font-size: 12px; font-weight: 600; color: var(--muted); border-radius: 8px; }
+  .reset:hover { color: var(--text); background: var(--bg-2); }
+  .close { inline-size: 24px; block-size: 24px; display: inline-flex; align-items: center; justify-content: center; color: var(--muted); border-radius: 8px; }
+  .close:hover { color: var(--text); background: var(--bg-2); }
+  .close svg { inline-size: 16px; block-size: 16px; }
+
+  .body { overflow: auto; flex: 1; }
+  .view { font-family: var(--mono); font-size: 13px; line-height: 1.5; tab-size: 2; }
+  [hidden] { display: none !important; }
+
+  /* HTML rows: one full-width row per element, the children indented, a caret folds a subtree */
+  #view-html { display: inline-flex; flex-direction: column; min-inline-size: 100%; padding: 6px 0; }
+  .row {
+    display: flex;
+    align-items: center;
+    min-block-size: 24px;
+    padding-inline: calc(8px + var(--d) * 14px) 12px;
+    white-space: pre;
+    border-inline-start: 3px solid transparent;
+    cursor: pointer;
+  }
+  .row:hover { background: var(--bg-2); }
+  .row[data-picked="true"] { background: color-mix(in srgb, var(--accent) 12%, transparent); border-color: var(--accent); }
+  .row.na { cursor: default; opacity: 0.55; }
+  .row.na:hover { background: none; }
+  .pickrow { min-block-size: 24px; display: inline-flex; align-items: center; text-align: start; white-space: pre; flex: 1; }
+  .row button:focus-visible { outline-offset: -2px; }
+  .caret { flex: none; inline-size: 16px; block-size: 16px; display: inline-flex; align-items: center; justify-content: center; color: var(--muted); font-size: 9px; margin-inline-end: 2px; border-radius: 4px; }
+  .caret::before { content: "▾"; }
+  .row[data-folded] .caret::before { content: "▸"; }
+  .caret.none { visibility: hidden; }
+  .caret:hover { color: var(--text); background: var(--border); }
+  .fold { display: none; }
+  .row[data-folded] .fold { display: inline; }
+  .tag { color: var(--tag); }
+  .an { color: var(--attr); }
+  .c { color: var(--muted); }
+
+  /* CSS rows: groups of declarations under a selector head; the tick removes a declaration from the page */
+  #view-css { padding: 8px 0; }
+  .gh { display: flex; align-items: baseline; gap: 8px; padding: 10px 12px 2px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+  .gh .sel { color: var(--attr); }
+  .grp.inline { --sel: var(--flex); border-inline-start: 3px solid var(--flex); margin-block: 4px; } /* an element's own style="": the inspector's resizes land here */
+  .grp.inline .gh .sel { color: var(--flex); }
+  .grp.hit .gh .sel { color: var(--accent); font-weight: 700; background: color-mix(in srgb, var(--accent) 12%, transparent); padding: 0 4px; margin: 0 -4px; border-radius: 4px; }
+  .grp[data-depth="1"] .gh, .grp[data-depth="1"] .d { padding-inline-start: 24px; }
+  .d { display: flex; align-items: center; gap: 8px; min-block-size: 26px; padding-inline: 12px; border-radius: 0; }
+  .d:hover { background: color-mix(in srgb, var(--css) 8%, transparent); }
+  .d input[type="checkbox"] { inline-size: 16px; block-size: 16px; margin: 0; accent-color: var(--accent); cursor: pointer; flex: none; }
+  .d .t { text-align: start; white-space: pre; border-radius: 4px; }
+  .d .t[aria-pressed="true"] { color: var(--css); font-weight: 600; }
+  .d.on { background: color-mix(in srgb, var(--css) 12%, transparent); }
+  .d .v { color: var(--val); cursor: text; border-block-end: 1px dotted transparent; }
+  .d .v:hover { border-color: var(--val); }
+  .d.edited .v { font-weight: 600; }
+  .d.auto { background: color-mix(in srgb, var(--flex) 7%, transparent); } /* a line the resize tool wrote: a light tint, the inline group's amber */
+  .d .sw { inline-size: 14px; block-size: 14px; border: 1px solid var(--border); border-radius: 3px; flex: none; }
+  .d.off .t, .d.off .v, .d.off .x { text-decoration: line-through; color: var(--muted); }
+  .d.off .sw { opacity: 0.4; }
+  .d .ed {
+    font: inherit;
+    line-height: 1.3;
+    color: var(--accent);
+    background: var(--bg-2);
+    border: 1px solid var(--accent);
+    border-radius: 4px;
+    padding: 1px 6px;
+    min-inline-size: 5ch;
+    box-shadow: 0 0 0 3px var(--wash);
+  }
+  .d .ed:focus { outline: none; }
+  .d .ed[aria-invalid="true"] { border-color: var(--dist); color: var(--dist); }
+  .d.na { opacity: 0.5; }
+  .d.na .t { cursor: default; }
+  .d.na:hover { background: none; }
+  .cm { padding: 2px 12px; color: var(--muted); white-space: pre; }
+  .empty { padding: 16px 12px; color: var(--muted); font-family: var(--font); }
+
+  /* the overlay: fixed boxes painted over the page's elements */
+  .ov { pointer-events: none; font-family: var(--mono); font-size: 11px; line-height: 1; }
+  .pick-surface { display: none; position: fixed; inset: 0; z-index: 1; cursor: crosshair; touch-action: pan-x pan-y pinch-zoom; } /* a transparent shield over the page: it takes the pointer input, the page never does; pans still scroll */
+  :host([picking]) .pick-surface, :host([sizing]) .pick-surface { display: block; }
+  .ov div { position: fixed; }
+  .ov .pick { position: static; }
+  .box { border: 1.5px solid var(--accent); border-radius: 2px; }
+  .probe .box { border-color: #2563eb; }
+  .pd, .mr, .bd { border-style: solid; border-color: var(--pad); }
+  .bd { border-color: var(--bord); }
+  .mr { border-color: var(--mar); }
+  .gd { border: 0 dashed rgba(37, 99, 235, 0.35); }
+  .gd.v { inline-size: 0; border-inline-start-width: 1px; }
+  .gd.h { block-size: 0; border-block-start-width: 1px; }
+  .lb {
+    display: inline-flex;
+    align-items: center;
+    gap: 6px;
+    padding: 5px 8px;
+    border-radius: 6px;
+    background: var(--chip);
+    color: var(--chip-text);
+    white-space: nowrap;
+    box-shadow: 0 2px 8px rgba(0, 0, 0, 0.18);
+  }
+  .lb .n { color: var(--chip-name); }
+  .lb .fx { color: var(--flex); }
+  .lb .bar { opacity: 0.4; }
+  .lb.hue { background: var(--accent); color: #fff; }
+  .lb.hue .n { color: #fff; font-weight: 700; }
+  .lb.hold { background: var(--dist); color: #fff; font-weight: 700; box-shadow: 0 2px 8px rgba(0, 0, 0, 0.18); } /* the resize tool: the area that held the drag, with the reason */
+  .lb.dch { padding: 3px 6px; border-radius: 4px; font-weight: 700; color: #fff; box-shadow: none; background: var(--dist); transform: translate(-50%, -50%); }
+  .lb.pv { background: var(--pad-ink); color: #fff; padding: 2px 4px; font-size: 10px; transform: translate(-50%, -50%); }
+  .lb.mv { background: var(--mar-ink); color: #fff; padding: 2px 4px; font-size: 10px; transform: translate(-50%, -50%); }
+  .lb.bv { background: var(--bord-ink); color: #fff; padding: 2px 4px; font-size: 10px; transform: translate(-50%, -50%); }
+  .lb.sz { transform: translate(-50%, -50%); padding: 3px 6px; border-radius: 4px; font-weight: 700; background: var(--accent); color: #fff; box-shadow: none; }
+  .dbox { border: 1.5px dashed var(--dist); border-radius: 2px; }
+  .free { background: repeating-linear-gradient(-45deg, rgba(100, 116, 139, 0.22) 0 3px, transparent 3px 9px); border: 1px dashed rgba(100, 116, 139, 0.55); } /* the ruler: room a box leaves unused beside itself */
+  .lb.fv { background: #64748b; color: #fff; padding: 2px 5px; font-size: 10px; transform: translate(-50%, -50%); box-shadow: none; }
+  .dln { background: var(--dist); }
+  .ln { background: var(--accent); }
+  .ln::before, .ln::after { content: ""; position: absolute; background: var(--accent); }
+  .dim-width { block-size: 1px; }
+  .dim-width::before, .dim-width::after { inline-size: 1px; block-size: 9px; inset-block-start: -4px; }
+  .dim-width::before { inset-inline-start: 0; }
+  .dim-width::after { inset-inline-end: 0; }
+  .dim-height { inline-size: 1px; }
+  .dim-height::before, .dim-height::after { block-size: 1px; inline-size: 9px; inset-inline-start: -4px; }
+  .dim-height::before { inset-block-start: 0; }
+  .dim-height::after { inset-block-end: 0; }
+
+  /* the state pill at the page foot while the picker is armed */
+  .state {
+    position: fixed;
+    inset-block-end: 20px;
+    inset-inline-start: 50%;
+    transform: translateX(-50%);
+    display: none;
+    padding: 10px 18px;
+    font-size: 14px;
+    font-weight: 600;
+    background: var(--bg);
+    border: 1px solid var(--border);
+    border-radius: 999px;
+    box-shadow: var(--shadow);
+    pointer-events: none;
+  }
+  :host([picking]) .state, :host([sizing]) .state { display: inline-flex; }
+
+  @media (max-width: 480px) {
+    /* phones: the open panel is a sheet fixed to the screen's foot, full width, rising from below; no drag, no resize */
+    :host { inset-block-end: 8px; inset-inline-end: 8px; font-size: 12px; }
+    :host([open]) { inset: auto 0 0 0 !important; }
+    :host(:not([open])) { inset: auto auto 8px 50% !important; }
+    :host(:not([open])) .launcher { transform: translateX(-50%); } /* the pill at the bottom centre; the transform sits on the pill, never on the host, so the fixed overlay keeps the viewport as its reference */
+    .fab { min-block-size: 36px; padding: 0 12px; font-size: 12px; gap: 6px; }
+    .panel { inline-size: 100vw !important; block-size: var(--sheet, 50vh) !important; max-block-size: 50vh !important; border-radius: 14px 14px 0 0; border-block-end: 0; box-shadow: 0 -8px 32px rgba(0, 0, 0, 0.18); }
+    :host([open]:not([folded])) .rz { display: none; }
+    .head { position: relative; block-size: 45px; padding-block-start: 12px; cursor: default; flex: none; }
+    .head button { touch-action: none; } /* a pull that starts on a tab is still a pull */
+    .body { min-block-size: 0; }
+    .head::before { content: ""; position: absolute; inset-block-start: 5px; inset-inline-start: 50%; inline-size: 36px; block-size: 4px; margin-inline-start: -18px; border-radius: 999px; background: var(--border); }
+    .tab { padding: 0 6px; font-size: 12px; }
+    .view { font-size: 11px; }
+    .state { inset-block-end: auto; inset-block-start: 8px; font-size: 12px; padding: 6px 12px; }
+    :host([sizing]) .state { inset-block-start: 44px; } /* under the resize tool's own bar */
+  }
+  @media (pointer: coarse) {
+    .hd { inline-size: 44px; block-size: 44px; margin: -22px 0 0 -22px; }
+    .hd::after { inset: 14px; }
+    .row { min-block-size: 30px; }
+    .pickrow { min-block-size: 30px; } /* taller rows: finger-sized targets */
+    .d { min-block-size: 30px; }
+    .d input[type="checkbox"] { inline-size: 18px; block-size: 18px; }
+  }
+  @media (prefers-reduced-motion: no-preference) {
+    .panel { animation: rise 160ms ease-out; }
+    @keyframes rise { from { opacity: 0; transform: translateY(8px); } }
+    @media (max-width: 480px) {
+      .panel { animation: slide 220ms ease-out; }
+      @keyframes slide { from { transform: translateY(100%); } }
+    }
+  }
