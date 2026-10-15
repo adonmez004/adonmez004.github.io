@@ -1,6 +1,6 @@
 {
   "name": "frontendmentorsolutions-demos",
-  "version": "0.1.76",
+  "version": "0.1.79",
   "private": true,
   "description": "The demo pages of frontendmentorsolutions.io and the code inspector they load. inspector.js is BUILT from src/ by build.mjs; never edit it by hand.",
   "type": "module",

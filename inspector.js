@@ -1,4 +1,4 @@
-// inspector.js v0.1.76
+// inspector.js v0.1.79
 
 (() => {
   // src/style.css
@@ -482,6 +482,7 @@
       this.ov = ov;
       this.into = null;
       this.placed = [];
+      this.pending = [];
       this.rectCache = null;
       this.geometryCache = null;
     }
@@ -490,8 +491,10 @@
       this.geometryCache = /* @__PURE__ */ new Map();
       this.ov.replaceChildren();
       this.placed = [];
+      this.pending = [];
     }
     end() {
+      this.resolve();
       this.into = null;
       this.rectCache = null;
       this.geometryCache = null;
@@ -569,87 +572,268 @@
       this.place(hl, "top", r.top, r.bottom, chrome);
     }
     chip(label, r, chrome) {
-      const h = label.getBoundingClientRect().height;
-      const spots = [];
-      if (r.top - h - 8 >= 0) spots.push([r.left, r.top - h - 8]);
-      if (r.bottom + h + 8 <= innerHeight) spots.push([r.left, r.bottom + 8]);
-      spots.push([r.left + 8, r.top + 8], [r.right + 8, r.top], [r.left - label.getBoundingClientRect().width - 8, r.top]);
-      const hits = (a, b) => a.left < b.right && a.right > b.left && a.top < b.bottom && a.bottom > b.top;
-      for (const [x, y] of spots) {
-        label.style.left = `${Math.max(x, 0)}px`;
-        label.style.top = `${y}px`;
-        this.clamp(label);
-        const b = label.getBoundingClientRect();
-        if (!hits(b, chrome) && !this.placed.some((p) => hits(b, p))) {
-          this.placed.push(b);
-          return;
-        }
-      }
-      label.remove();
+      this.pending.push({ kind: "chip", label, r, chrome });
     }
     fix(label) {
-      this.clamp(label);
-      this.placed.push(label.getBoundingClientRect());
+      this.pending.push({ kind: "fix", label });
       return label;
     }
-    clamp(label) {
-      const b = label.getBoundingClientRect();
-      let dx = 0, dy = 0;
-      if (b.left < 4) dx = 4 - b.left;
-      else if (b.right > innerWidth - 4) dx = innerWidth - 4 - b.right;
-      if (b.top < 4) dy = 4 - b.top;
-      else if (b.bottom > innerHeight - 4) dy = innerHeight - 4 - b.bottom;
-      if (dx) label.style.left = `${num(label.style.left) + dx}px`;
-      if (dy) label.style.top = `${num(label.style.top) + dy}px`;
+    place(label, side, from, to, chrome) {
+      this.pending.push({ kind: "place", label, side, from, to, chrome });
     }
     beside(r, chrome) {
       if (innerWidth - r.right < 90) return false;
       return !(r.right + 10 < chrome.right && r.right + 90 > chrome.left && r.top < chrome.bottom && r.bottom > chrome.top);
     }
-    place(label, side, from, to, chrome) {
-      const set = (mid2) => {
-        label.style[side] = `${mid2}px`;
-      };
+    resolve() {
+      const sizes = /* @__PURE__ */ new Map();
+      for (const { label } of this.pending) {
+        if (sizes.has(label)) continue;
+        const b = label.getBoundingClientRect(), t = getComputedStyle(label).transform.match(/matrix\(([^)]*)\)/);
+        const [, , , , tx, ty] = t ? t[1].split(",").map(Number) : [1, 0, 0, 1, 0, 0];
+        sizes.set(label, { w: b.width, h: b.height, tx, ty });
+      }
       const hits = (a, b) => a.left < b.right && a.right > b.left && a.top < b.bottom && a.bottom > b.top;
-      const free = () => {
-        const b = label.getBoundingClientRect();
+      const rectOf = (label) => {
+        const s = sizes.get(label), l = num(label.style.left) + s.tx, t = num(label.style.top) + s.ty;
+        return { left: l, top: t, right: l + s.w, bottom: t + s.h, width: s.w, height: s.h };
+      };
+      const clamp = (label) => {
+        const b = rectOf(label);
+        let dx = 0, dy = 0;
+        if (b.left < 4) dx = 4 - b.left;
+        else if (b.right > innerWidth - 4) dx = innerWidth - 4 - b.right;
+        if (b.top < 4) dy = 4 - b.top;
+        else if (b.bottom > innerHeight - 4) dy = innerHeight - 4 - b.bottom;
+        if (dx) label.style.left = `${num(label.style.left) + dx}px`;
+        if (dy) label.style.top = `${num(label.style.top) + dy}px`;
+      };
+      const free = (label, chrome) => {
+        const b = rectOf(label);
         return !hits(b, chrome) && !this.placed.some((p) => hits(b, p));
       };
-      const mid = (from + to) / 2;
-      set(mid);
-      if (!free()) {
-        const b = label.getBoundingClientRect();
-        const size = side === "left" ? b.width : b.height, step = size * 0.6 + 4;
-        const span2 = Math.max((to - from) / 2 - size / 2, 0);
-        let found = false;
-        for (let k = 1; k * step <= span2 && !found; k++) {
-          for (const dir of [1, -1]) {
-            set(mid + dir * k * step);
-            if (free()) {
+      for (const item of this.pending) {
+        const { label } = item;
+        if (!label.isConnected) continue;
+        if (item.kind === "fix") {
+          clamp(label);
+          this.placed.push(rectOf(label));
+          continue;
+        }
+        if (item.kind === "chip") {
+          const { r, chrome: chrome2 } = item, { w: w2, h: h2 } = sizes.get(label);
+          const spots = [];
+          if (r.top - h2 - 8 >= 0) spots.push([r.left, r.top - h2 - 8]);
+          if (r.bottom + h2 + 8 <= innerHeight) spots.push([r.left, r.bottom + 8]);
+          spots.push([r.left + 8, r.top + 8], [r.right + 8, r.top], [r.left - w2 - 8, r.top]);
+          let found = false;
+          for (const [x, y] of spots) {
+            label.style.left = `${Math.max(x, 0)}px`;
+            label.style.top = `${y}px`;
+            clamp(label);
+            if (free(label, chrome2)) {
+              this.placed.push(rectOf(label));
               found = true;
               break;
             }
           }
+          if (!found) label.remove();
+          continue;
         }
-        if (!found) {
-          set(mid);
-          const cross = side === "left" ? "top" : "left", thick = (side === "left" ? b.height : b.width) + 4;
-          const base = num(label.style[cross]);
-          for (let k = 1; k <= 4 && !found; k++) {
-            for (const dir of [-1, 1]) {
-              label.style[cross] = `${base + dir * k * thick}px`;
-              if (free()) {
+        const { side, from, to, chrome } = item, { w, h } = sizes.get(label);
+        const set = (mid2) => {
+          label.style[side] = `${mid2}px`;
+        };
+        const mid = (from + to) / 2;
+        set(mid);
+        if (!free(label, chrome)) {
+          const size = side === "left" ? w : h, step = size * 0.6 + 4;
+          const span2 = Math.max((to - from) / 2 - size / 2, 0);
+          let found = false;
+          for (let k = 1; k * step <= span2 && !found; k++) {
+            for (const dir of [1, -1]) {
+              set(mid + dir * k * step);
+              if (free(label, chrome)) {
                 found = true;
                 break;
               }
             }
           }
-          if (!found) label.style[cross] = `${base}px`;
+          if (!found) {
+            set(mid);
+            const cross = side === "left" ? "top" : "left", thick = (side === "left" ? h : w) + 4;
+            const base = num(label.style[cross]);
+            for (let k = 1; k <= 4 && !found; k++) {
+              for (const dir of [-1, 1]) {
+                label.style[cross] = `${base + dir * k * thick}px`;
+                if (free(label, chrome)) {
+                  found = true;
+                  break;
+                }
+              }
+            }
+            if (!found) label.style[cross] = `${base}px`;
+          }
         }
+        clamp(label);
+        this.placed.push(rectOf(label));
       }
-      this.fix(label);
+      this.pending = [];
     }
   };
+
+  // src/foreign.js
+  var skip = (n) => n.nodeType === 1 && (helper(n) || n.localName === "script" && /inspector\.js/.test(n.getAttribute("src") || "")) || n.nodeType === 8 && /inspector/i.test(n.data) || n.nodeType === 3 && !n.data.trim();
+  var KNOWN = /^(immersive-translate|grammarly|adguard|replit-pill)/i;
+  var foreignRoots = /* @__PURE__ */ new Set();
+  var sourceTops = null;
+  var ROOTS = () => [document.documentElement, document.head, document.body];
+  var topOf = (el) => {
+    let n = el;
+    while (n.parentElement && !ROOTS().includes(n.parentElement)) n = n.parentElement;
+    return n;
+  };
+  var markForeign = () => {
+    foreignRoots.clear();
+    for (const root of ROOTS()) for (const el of root?.children || []) {
+      if (ROOTS().includes(el) || /^(fm-inspector|style|link|script|meta|title|base|noscript|template)$/.test(el.localName)) continue;
+      const known = KNOWN.test(el.id) || KNOWN.test(el.localName);
+      const inSource = !sourceTops || (el.id ? sourceTops.ids.has(el.id) : sourceTops.tags.has(el.localName));
+      const extensionLike = !!el.id || el.localName.includes("-") || !!el.shadowRoot;
+      if (known || !inSource && extensionLike) foreignRoots.add(el);
+    }
+  };
+  var readSource = async () => {
+    try {
+      const response = await fetch(location.href, { cache: "force-cache" });
+      if (!response.ok) return;
+      const doc = new DOMParser().parseFromString(await response.text(), "text/html");
+      const tops = [doc.documentElement, doc.head, doc.body].flatMap((root) => [...root.children]).filter((el) => ![doc.head, doc.body].includes(el));
+      sourceTops = { tags: new Set(tops.map((el) => el.localName)), ids: new Set(tops.filter((el) => el.id).map((el) => el.id)), styles: new Set([...doc.querySelectorAll("style")].map((el) => el.textContent.trim())) };
+    } catch {
+    }
+    markForeign();
+  };
+  var helper = (el) => !!el?.closest && (!!el.closest("fm-inspector, [data-fm-inspector-ignore]") || foreignRoots.has(topOf(el)));
+  var rendered = (el) => el.isConnected && el.getClientRects().length > 0 && !helper(el);
+  var sourceStyles = () => sourceTops?.styles || null;
+
+  // src/overlay/draw.js
+  function paintModel(painter, el, hue, chrome, focus) {
+    const r = painter.geometry(el).r;
+    if (el === focus) {
+      painter.box("gd v", r.left, 0, 0, innerHeight);
+      painter.box("gd v", r.right, 0, 0, innerHeight);
+      painter.box("gd h", 0, r.top, innerWidth, 0);
+      painter.box("gd h", 0, r.bottom, innerWidth, 0);
+    }
+    painter.box("box", r.left, r.top, r.width, r.height);
+    painter.chip(painter.label("hue", painter.chipParts(el, r, false), 0, 0), r, chrome);
+    painter.dims(r, chrome);
+  }
+  function paintProbe(painter, el, chrome) {
+    const r = painter.geometry(el).r;
+    painter.box("box", r.left, r.top, r.width, r.height);
+    painter.chip(painter.label("", painter.chipParts(el, r, false), 0, 0), r, chrome);
+    painter.dims(r, chrome);
+  }
+  function paintMeasure(painter, el, chrome) {
+    const { r, p, m, b } = painter.geometry(el);
+    const all = { t: 1, r: 1, b: 1, l: 1 };
+    const pos = { t: Math.max(m.t, 0), r: Math.max(m.r, 0), b: Math.max(m.b, 0), l: Math.max(m.l, 0) };
+    if (pos.t || pos.r || pos.b || pos.l) painter.ring("mr", painter.outer(r, pos), pos, all, "mv");
+    if (b.t || b.r || b.b || b.l) painter.ring("bd", r, b, all, "bv");
+    const inner = { left: r.left + b.l, top: r.top + b.t, right: r.right - b.r, bottom: r.bottom - b.b, width: r.width - b.l - b.r, height: r.height - b.t - b.b };
+    if (p.t || p.r || p.b || p.l) painter.ring("pd", inner, p, all, "pv");
+    painter.box("box", r.left, r.top, r.width, r.height);
+    painter.chip(painter.label("", painter.chipParts(el, r, true), 0, 0), r, chrome);
+    paintFree(painter, el, r, m);
+  }
+  function paintFree(painter, el, r, m) {
+    const parent = el.parentElement, cs = painter.geometry(el).cs;
+    if (!parent || helper(parent)) return;
+    const pcs = getComputedStyle(parent);
+    if (!/^(block|flow-root|list-item)$/.test(pcs.display) || !/^(block|flex|grid|table|list-item|flow-root)$/.test(cs.display) || cs.float !== "none" || /absolute|fixed/.test(cs.position)) return;
+    const { r: pr, p: pp, b: pb } = painter.geometry(parent);
+    const inner = { left: pr.left + pb.l + pp.l, right: pr.right - pb.r - pp.r };
+    const top = r.top - Math.max(m.t, 0), height = r.height + Math.max(m.t, 0) + Math.max(m.b, 0);
+    for (const [l, w] of [[inner.left, r.left - Math.max(m.l, 0) - inner.left], [r.right + Math.max(m.r, 0), inner.right - r.right - Math.max(m.r, 0)]]) {
+      if (w < 24 || height < 8) continue;
+      painter.box("free", l, top, w, height);
+      if (w >= 72) painter.label("fv", `unused ${fmt(w)}px`, l + w / 2, top + height / 2);
+    }
+  }
+  function paintDistance(painter, from, to, chrome) {
+    const a = from.getBoundingClientRect(), b = to.getBoundingClientRect();
+    painter.box("dbox", b.left, b.top, b.width, b.height);
+    let line = null, gap = 0, chipX, chipY;
+    const mid = (lo1, hi1, lo2, hi2) => {
+      const lo = Math.max(lo1, lo2), hi = Math.min(hi1, hi2);
+      return lo < hi ? (lo + hi) / 2 : (lo1 + hi1) / 2;
+    };
+    if (b.left >= a.right) {
+      gap = b.left - a.right;
+      const y = mid(a.top, a.bottom, b.top, b.bottom);
+      line = painter.box("dln", a.right, y, gap, 1);
+      chipX = a.right + gap / 2;
+      chipY = y;
+    } else if (b.right <= a.left) {
+      gap = a.left - b.right;
+      const y = mid(a.top, a.bottom, b.top, b.bottom);
+      line = painter.box("dln", b.right, y, gap, 1);
+      chipX = b.right + gap / 2;
+      chipY = y;
+    } else if (b.top >= a.bottom) {
+      gap = b.top - a.bottom;
+      const x = mid(a.left, a.right, b.left, b.right);
+      line = painter.box("dln", x, a.bottom, 1, gap);
+      chipX = x;
+      chipY = a.bottom + gap / 2;
+    } else if (b.bottom <= a.top) {
+      gap = a.top - b.bottom;
+      const x = mid(a.left, a.right, b.left, b.right);
+      line = painter.box("dln", x, b.bottom, 1, gap);
+      chipX = x;
+      chipY = b.bottom + gap / 2;
+    }
+    if (line) painter.label("dch", fmt(gap), chipX, chipY);
+    painter.chip(painter.label("", painter.chipParts(to, b), 0, 0), b, chrome);
+  }
+  function paintDecl(painter, el, d, chrome) {
+    const { r, cs, p, m, b } = painter.geometry(el);
+    const band = sides(d.prop, cs);
+    if (band && band.kind === "padding") {
+      painter.ring("pd", { left: r.left + b.l, top: r.top + b.t, right: r.right - b.r, bottom: r.bottom - b.b, width: r.width - b.l - b.r, height: r.height - b.t - b.b }, p, band.sides, "pv");
+    } else if (band) {
+      const pos = { t: Math.max(m.t, 0), r: Math.max(m.r, 0), b: Math.max(m.b, 0), l: Math.max(m.l, 0) };
+      painter.ring("mr", painter.outer(r, pos), pos, band.sides, "mv");
+    }
+    painter.box("box", r.left, r.top, r.width, r.height);
+    if (!band && SIZE.test(d.prop)) sizeLine(painter, el, d, r, cs, p, b, chrome);
+  }
+  function sizeLine(painter, el, d, r, cs, p, b, chrome) {
+    const vertical = /^(vertical|sideways)/.test(cs.writingMode);
+    const horizontal = /width/.test(d.prop) || /inline-size/.test(d.prop) && !vertical || /block-size/.test(d.prop) && vertical;
+    const resolved = num(cs[camel(d.prop)]);
+    const content = cs.boxSizing === "content-box";
+    const pad = content ? horizontal ? b.l + p.l : b.t + p.t : 0;
+    const len = Number.isFinite(parseFloat(cs[camel(d.prop)])) ? resolved : (horizontal ? r.width : r.height) - (content ? horizontal ? b.l + b.r + p.l + p.r : b.t + b.b + p.t + p.b : 0);
+    const text = `${d.prop}: ${d.value}`;
+    if (horizontal) {
+      const above = r.top >= 32;
+      const y = above ? r.top - 10 : r.top + 10;
+      painter.box("ln dim-width", r.left + pad, y, len, 1);
+      const l = painter.label("sz", text, 0, y + (above ? -12 : 12));
+      painter.place(l, "left", r.left + pad, r.left + pad + len, chrome);
+    } else {
+      const beside = painter.beside(r, chrome);
+      const x = beside ? r.right + 10 : r.right - 10;
+      painter.box("ln dim-height", x, r.top + pad, 1, len);
+      const l = painter.label("sz", text, x + (beside ? 8 : -8), 0);
+      l.style.transform = beside ? "translate(0, -50%)" : "translate(-100%, -50%)";
+      painter.place(l, "top", r.top + pad, r.top + pad + len, chrome);
+    }
+  }
 
   // src/css/parse.js
   var CONDITIONAL = /^@(media|supports|layer|container|scope)\b/;
@@ -873,42 +1057,6 @@
     }
     return amp ? out : `:is(${parent}) :is(${child})`;
   }
-
-  // src/foreign.js
-  var skip = (n) => n.nodeType === 1 && (helper(n) || n.localName === "script" && /inspector\.js/.test(n.getAttribute("src") || "")) || n.nodeType === 8 && /inspector/i.test(n.data) || n.nodeType === 3 && !n.data.trim();
-  var KNOWN = /^(immersive-translate|grammarly|adguard|replit-pill)/i;
-  var foreignRoots = /* @__PURE__ */ new Set();
-  var sourceTops = null;
-  var ROOTS = () => [document.documentElement, document.head, document.body];
-  var topOf = (el) => {
-    let n = el;
-    while (n.parentElement && !ROOTS().includes(n.parentElement)) n = n.parentElement;
-    return n;
-  };
-  var markForeign = () => {
-    foreignRoots.clear();
-    for (const root of ROOTS()) for (const el of root?.children || []) {
-      if (ROOTS().includes(el) || /^(fm-inspector|style|link|script|meta|title|base|noscript|template)$/.test(el.localName)) continue;
-      const known = KNOWN.test(el.id) || KNOWN.test(el.localName);
-      const inSource = !sourceTops || (el.id ? sourceTops.ids.has(el.id) : sourceTops.tags.has(el.localName));
-      const extensionLike = !!el.id || el.localName.includes("-") || !!el.shadowRoot;
-      if (known || !inSource && extensionLike) foreignRoots.add(el);
-    }
-  };
-  var readSource = async () => {
-    try {
-      const response = await fetch(location.href, { cache: "force-cache" });
-      if (!response.ok) return;
-      const doc = new DOMParser().parseFromString(await response.text(), "text/html");
-      const tops = [doc.documentElement, doc.head, doc.body].flatMap((root) => [...root.children]).filter((el) => ![doc.head, doc.body].includes(el));
-      sourceTops = { tags: new Set(tops.map((el) => el.localName)), ids: new Set(tops.filter((el) => el.id).map((el) => el.id)), styles: new Set([...doc.querySelectorAll("style")].map((el) => el.textContent.trim())) };
-    } catch {
-    }
-    markForeign();
-  };
-  var helper = (el) => !!el?.closest && (!!el.closest("fm-inspector, [data-fm-inspector-ignore]") || foreignRoots.has(topOf(el)));
-  var rendered = (el) => el.isConnected && el.getClientRects().length > 0 && !helper(el);
-  var sourceStyles = () => sourceTops?.styles || null;
 
   // src/css/model.js
   var CssStore = class {
@@ -1388,8 +1536,1108 @@ ${body}`);
     }
   };
 
+  // src/tools/size-explain.js
+  var sizeProp = (el) => /^(vertical|sideways)/.test(getComputedStyle(el).writingMode) ? "block-size" : "inline-size";
+  var extraOf = (cs) => cs.boxSizing === "content-box" ? num(cs.paddingLeft) + num(cs.paddingRight) + num(cs.borderLeftWidth) + num(cs.borderRightWidth) : 0;
+  function sizeOf(el, attr, prop = sizeProp(el)) {
+    const style = document.createElement("div").style;
+    style.cssText = attr || "";
+    return { prop, value: style.getPropertyValue(prop), priority: style.getPropertyPriority(prop), cssText: style.cssText };
+  }
+  function resizeSupported(el) {
+    for (let node = el; node; node = node.parentElement) {
+      const cs = getComputedStyle(node);
+      if (cs.transform !== "none" || cs.zoom && cs.zoom !== "normal" && num(cs.zoom) !== 1) return false;
+    }
+    return true;
+  }
+  function contentNeed(el) {
+    const cs = getComputedStyle(el), out = { x: 0, y: 0 };
+    if (cs.display === "inline" || !el.scrollWidth) return out;
+    if (cs.overflowX === "visible") out.x = el.scrollWidth - el.clientWidth;
+    if (cs.overflowY === "visible") out.y = el.scrollHeight - el.clientHeight;
+    return out;
+  }
+  function overflow(el, parent) {
+    const r = el.getBoundingClientRect(), pr = parent.getBoundingClientRect(), pcs = getComputedStyle(parent), cs = getComputedStyle(el);
+    const right = pr.right - num(pcs.paddingRight) - num(pcs.borderRightWidth), bottom = pr.bottom - num(pcs.paddingBottom) - num(pcs.borderBottomWidth);
+    return { x: r.right + Math.max(num(cs.marginRight), 0) - right, y: r.bottom + Math.max(num(cs.marginBottom), 0) - bottom };
+  }
+  function trackTokens(value, limit = 2048) {
+    const tokens = [];
+    let depth = 0, brackets = 0, quote = null, token = "";
+    const source = value.replace(/\/\*[\s\S]*?\*\//g, "");
+    for (let i = 0; i < source.length; i++) {
+      const ch = source[i];
+      if (quote) {
+        token += ch;
+        if (ch === "\\") token += source[++i] || "";
+        else if (ch === quote) quote = null;
+        continue;
+      }
+      if (ch === '"' || ch === "'") quote = ch;
+      else if (ch === "(") depth++;
+      else if (ch === ")") depth = Math.max(0, depth - 1);
+      else if (ch === "[") brackets++;
+      else if (ch === "]") brackets = Math.max(0, brackets - 1);
+      if (/\s/.test(ch) && !depth && !brackets) {
+        if (token) tokens.push(token);
+        token = "";
+      } else token += ch;
+    }
+    if (token) tokens.push(token);
+    const out = [];
+    for (const item of tokens) {
+      if (out.length >= limit) break;
+      if (/^\[.*\]$/.test(item)) continue;
+      const repeat = item.match(/^repeat\((auto-fill|auto-fit|\d+),\s*(.*)\)$/);
+      if (!repeat) {
+        out.push(item);
+        continue;
+      }
+      const inner = trackTokens(repeat[2], limit - out.length);
+      if (!inner.length) continue;
+      const count = /^\d+$/.test(repeat[1]) ? Math.min(Number(repeat[1]), Math.ceil((limit - out.length) / inner.length)) : 1;
+      for (let n = 0; n < count && out.length < limit; n++) out.push(...inner.slice(0, limit - out.length));
+    }
+    return out;
+  }
+  function declaredOn(store, el, props) {
+    const models = store.models.filter((m) => !m.inlineEl && store.matchModel(m, [el]).length > 0);
+    for (const m of models.reverse()) for (const d of [...m.decls].reverse()) if (d.type === "decl" && d.on && d.live && props.includes(d.prop)) return d;
+    return null;
+  }
+  function sizeLimits(store, el, cs) {
+    const parent = el.parentElement;
+    const out = { w: Infinity, whyW: null, parent: null };
+    if (!parent || /absolute|fixed/.test(cs.position)) return out;
+    out.parent = parent;
+    const pcs = getComputedStyle(parent);
+    if (/grid/.test(pcs.display)) {
+      const decl = declaredOn(store, parent, ["grid-template-columns", "grid-template", "grid"]);
+      const sizes = pcs.gridTemplateColumns.split(" ").map(num).filter((n) => n > 0), gap = num(pcs.columnGap);
+      if (decl && sizes.length) {
+        const tokens = trackTokens(decl.value), pr = parent.getBoundingClientRect(), r = el.getBoundingClientRect();
+        let x = pr.left + num(pcs.borderLeftWidth) + num(pcs.paddingLeft), first = -1, last = -1, width = 0;
+        sizes.forEach((size, i) => {
+          const overlaps = x + size > r.left + 0.5 && x < r.right - 0.5;
+          if (overlaps) {
+            if (first < 0) first = i;
+            last = i;
+            width += size + (first < i ? gap : 0);
+          }
+          x += size + gap;
+        });
+        const fixed = (t) => /^(\d|\.)/.test(t) && /(px|%|em|rem|vw|vh|vmin|vmax|fr|ch|ex)$/.test(t) || /^minmax\(.*,\s*(\d|\.)[^)]*(px|%|em|rem|vw|vh|fr|ch)\)$/.test(t);
+        if (first >= 0 && tokens.length && Array.from({ length: last - first + 1 }, (_, k) => tokens[Math.min(first + k, tokens.length - 1)]).every(fixed)) {
+          out.w = width;
+          out.whyW = "grid";
+        }
+      }
+    }
+    return out;
+  }
+  var contentWidth = (el) => {
+    const cs = getComputedStyle(el);
+    return el.getBoundingClientRect().width - num(cs.paddingLeft) - num(cs.paddingRight) - num(cs.borderLeftWidth) - num(cs.borderRightWidth);
+  };
+  function parentBase(store, el) {
+    const parent = el.parentElement, cs = getComputedStyle(el);
+    if (!parent || /absolute|fixed/.test(cs.position) || cs.display === "inline") return 0;
+    const pcs = getComputedStyle(parent);
+    if (/grid/.test(pcs.display) && sizeLimits(store, el, cs).whyW !== "grid") return 0;
+    return contentWidth(parent);
+  }
+  function explainSize(store, el, wantW, cap) {
+    const r = el.getBoundingClientRect(), cs = getComputedStyle(el), parent = el.parentElement, pcs = parent ? getComputedStyle(parent) : null;
+    const axes = Math.abs(wantW - r.width) > 1 ? [{ axis: "x", want: wantW, got: r.width }] : [];
+    if (!axes.length) return null;
+    const rendered2 = (x) => store.matchModel(x, [el]).length > 0;
+    const own = store.models.filter((m) => !m.inlineEl && m.decls.some((d) => d.type === "decl" && d.on) && rendered2(m));
+    const above = parent ? store.models.filter((m) => !m.inlineEl && m.decls.some((d) => d.type === "decl" && d.on) && store.matchModel(m, [parent]).length > 0) : [];
+    const find = (models, props) => {
+      for (const m of [...models].reverse()) for (const d of [...m.decls].reverse()) if (d.type === "decl" && d.on && d.live && props.includes(d.prop)) return d;
+      return null;
+    };
+    const flex = /flex/.test(pcs?.display || ""), grid = /grid/.test(pcs?.display || ""), row = !/column/.test(pcs?.flexDirection || "");
+    const held = (d, text, area = null) => ({ d, text, area });
+    for (const { axis, want, got } of axes) {
+      const x = axis === "x";
+      const maxP = x ? ["max-width", "max-inline-size"] : ["max-height", "max-block-size"], minP = x ? ["min-width", "min-inline-size"] : ["min-height", "min-block-size"];
+      const maxC = x ? cs.maxWidth : cs.maxHeight, minC = x ? cs.minWidth : cs.minHeight;
+      const pad = cs.boxSizing === "content-box" ? x ? num(cs.paddingLeft) + num(cs.paddingRight) + num(cs.borderLeftWidth) + num(cs.borderRightWidth) : num(cs.paddingTop) + num(cs.paddingBottom) + num(cs.borderTopWidth) + num(cs.borderBottomWidth) : 0;
+      if (maxC !== "none" && got < want && Math.abs(num(maxC) + pad - got) <= 1) {
+        const d2 = find(own, maxP);
+        return held(d2, `held by ${d2 ? `${d2.prop}: ${d2.value}` : `${maxP[0]}: ${maxC}`}`);
+      }
+      if (minC !== "auto" && num(minC) > 0 && got > want && Math.abs(num(minC) + pad - got) <= 1) {
+        const d2 = find(own, minP);
+        return held(d2, `held by ${d2 ? `${d2.prop}: ${d2.value}` : `${minP[0]}: ${minC}`}`);
+      }
+      if (cap === "content") {
+        const child = [...el.children].filter((c) => !helper(c)).sort((a, b) => {
+          const ra = a.getBoundingClientRect(), rb = b.getBoundingClientRect();
+          return x ? rb.right - ra.right : rb.bottom - ra.bottom;
+        })[0];
+        const d2 = child ? store.models.find((m) => m.inlineEl === child)?.decls.find((k) => k.type === "decl" && k.on && k.prop === (x ? "inline-size" : "block-size")) || null : null;
+        return held(d2, `held by content${child ? `: ${name(child)}` : ""}`, child || null);
+      }
+      if (cap) {
+        const d2 = cap === "grid" ? find(above, x ? ["grid-template-columns", "grid-auto-columns", "grid-template", "grid"] : ["grid-template-rows", "grid-auto-rows", "grid-template", "grid"]) : find(above, x ? ["width", "inline-size", "max-width", "max-inline-size"] : ["height", "block-size", "max-height", "max-block-size"]);
+        if (cap === "grid") return held(d2, `grid track${d2 ? `: ${d2.value}` : ""}`, parent);
+        if (d2) return held(d2, `${name(parent)}: ${d2.prop}: ${d2.value}`, parent);
+        const gp = parent?.parentElement, gcs = gp ? getComputedStyle(gp) : null;
+        if (gcs && /grid/.test(gcs.display)) {
+          const g = declaredOn(store, gp, ["place-items", "justify-items"]) || declaredOn(store, parent, ["justify-self", "place-self"]) || declaredOn(store, gp, ["display"]);
+          return held(g, `${name(gp)} grid${g ? `: ${g.prop}: ${g.value}` : ""}`, parent);
+        }
+        if (gcs && /flex/.test(gcs.display)) {
+          const g = declaredOn(store, parent, ["flex", "flex-grow"]) || declaredOn(store, gp, ["display"]);
+          return held(g, `${name(gp)} flex${g ? `: ${g.prop}: ${g.value}` : ""}`, parent);
+        }
+        return held(null, `${name(parent)}: content-sized`, parent);
+      }
+      const max = x ? ["max-width", "max-inline-size"] : ["max-height", "max-block-size"], min = x ? ["min-width", "min-inline-size"] : ["min-height", "min-block-size"];
+      const size = x ? ["width", "inline-size"] : ["height", "block-size"];
+      const maxV = x ? cs.maxWidth : cs.maxHeight, minV = x ? cs.minWidth : cs.minHeight;
+      let d = null, note = "";
+      if (maxV !== "none" && got < want && Math.abs(num(maxV) + (cs.boxSizing === "content-box" ? x ? num(cs.paddingLeft) + num(cs.paddingRight) + num(cs.borderLeftWidth) + num(cs.borderRightWidth) : num(cs.paddingTop) + num(cs.paddingBottom) + num(cs.borderTopWidth) + num(cs.borderBottomWidth) : 0) - got) <= 1) {
+        d = find(own, max);
+        note = d ? `${d.prop}: ${d.value}` : `${max[0]}: ${maxV}`;
+      } else if (minV !== "auto" && num(minV) > 0 && got > want) {
+        d = find(own, min);
+        note = d ? `${d.prop}: ${d.value}` : `${min[0]}: ${minV}`;
+      } else if ((d = find(own, size)) && d.important) note = `${d.prop}: ${d.value} !important`;
+      else if (cs.display === "inline") {
+        d = find(own, ["display"]);
+        note = "display: inline";
+      } else if (flex && row === x) {
+        const grow = num(cs.flexGrow), shrink = num(cs.flexShrink);
+        d = find(own, got < want ? ["flex-shrink", "flex"] : ["flex-grow", "flex"]);
+        note = d ? `${d.prop}: ${d.value}` : got < want && shrink ? `flex-shrink: ${shrink}` : got > want && grow ? `flex-grow: ${grow}` : "the flex container";
+        if (!d) d = find(above, ["display"]);
+      } else if (grid) {
+        d = find(above, x ? ["grid-template-columns", "grid-auto-columns"] : ["grid-template-rows", "grid-auto-rows"]);
+        note = d ? `${d.prop}: ${d.value}` : "the grid track";
+      } else if (/absolute|fixed/.test(cs.position) && (x ? cs.left !== "auto" && cs.right !== "auto" : cs.top !== "auto" && cs.bottom !== "auto")) {
+        d = find(own, x ? ["left", "right", "inset", "inset-inline"] : ["top", "bottom", "inset", "inset-block"]);
+        note = d ? `${d.prop}: ${d.value}` : "both insets";
+      } else {
+        d = null;
+        note = "";
+      }
+      if (note) return held(d, `held by ${note}`);
+    }
+    return null;
+  }
+
+  // src/tools/resize.js
+  var Resizer = class {
+    constructor(ui) {
+      this.ui = ui;
+      const { els } = ui;
+      this.sizing = false;
+      this.target = null;
+      this.sized = /* @__PURE__ */ new Map();
+      this.wrote = /* @__PURE__ */ new WeakMap();
+      this.drag = null;
+      this.cap = { x: null, y: null };
+      this.hugs = /* @__PURE__ */ new Set();
+      this.blocked = null;
+      this.heldArea = null;
+      this.history = new History((n) => {
+        els.sundo.disabled = !n;
+      });
+      this.handleEvents(els.handle);
+      els.sundo.addEventListener("click", () => this.undo());
+      els.sreset.addEventListener("click", () => this.resetAll());
+      ui.tools.register("sizing", {
+        label: "Click an element to resize · Esc to end",
+        handlers: () => ({
+          click: (target) => this.choose(target),
+          escape: () => {
+            this.setSizing(false);
+            els.btn.focus();
+          }
+        }),
+        release: () => this.cancel()
+        // a running drag ends when the tool changes hands or closes
+      });
+    }
+    setSizing(on) {
+      if (on === this.sizing) return;
+      if (!on) this.cancel();
+      this.sizing = on;
+      this.ui.els.btn.setAttribute("aria-pressed", String(on));
+      this.ui.host.toggleAttribute("sizing", on);
+      if (on) this.ui.tools.arm("sizing");
+      else {
+        this.target = null;
+        this.setBlocked(null, "");
+        this.ui.els.handle.removeAttribute("data-on");
+        this.ui.els.hreset.removeAttribute("data-on");
+        this.ui.els.wval.textContent = "";
+        this.ui.tools.end("sizing");
+      }
+      this.ui.paint();
+    }
+    prune() {
+      for (const el of this.sized.keys()) if (!el.isConnected || helper(el)) this.sized.delete(el);
+      if (this.target && (!this.target.isConnected || helper(this.target))) {
+        this.cancel();
+        this.target = null;
+        this.ui.els.handle.removeAttribute("data-on");
+        this.ui.els.hreset.removeAttribute("data-on");
+        this.ui.els.wval.textContent = "";
+      }
+    }
+    writeSize(el, px, snap = true) {
+      const base = parentBase(this.ui.store, el), prop = sizeProp(el), parent = el.parentElement;
+      if (base > 0 && !snap) px = Math.min(px, Math.round(base));
+      el.style.setProperty(prop, `${Math.max(1, px)}px`, el.style.getPropertyPriority(prop));
+      if (base > 0 && snap && px >= base - 0.5 && !this.hugs.has(parent)) {
+        if (Math.abs(contentWidth(parent) - base) > 0.5) this.hugs.add(parent);
+        else {
+          const extra = extraOf(getComputedStyle(el));
+          el.style.setProperty(prop, extra ? `calc(100% - ${fmt(extra)}px)` : "100%", el.style.getPropertyPriority(prop));
+        }
+      }
+      this.wrote.set(el, { attr: el.getAttribute("style"), prop });
+      return base > 0 && px > base + 0.5 && !this.hugs.has(parent);
+    }
+    restoreSize(el, attr, prop = sizeProp(el)) {
+      if (!el.isConnected) return;
+      const want = sizeOf(el, attr, prop);
+      this.ui.store.writeProperty(el.style, want.prop, want.value, want.priority);
+      if (el.style.cssText === want.cssText) {
+        if (attr == null) el.removeAttribute("style");
+        else el.setAttribute("style", attr);
+      }
+      this.wrote.set(el, { attr: el.getAttribute("style"), prop });
+    }
+    pageSized(el) {
+      const ours = this.wrote.get(el);
+      if (!ours) return false;
+      const now = sizeOf(el, el.getAttribute("style"), ours.prop), expected = sizeOf(el, ours.attr, ours.prop);
+      return now.value !== expected.value || now.priority !== expected.priority;
+    }
+    cancel() {
+      if (this.drag) this.ui.cancelGesture();
+    }
+    crush(el, kids) {
+      const depth = (node) => {
+        let n = 0;
+        for (let p = node; p && p !== el; p = p.parentElement) n++;
+        return n;
+      };
+      for (const kid of [...kids].sort((a, b) => depth(a) - depth(b))) {
+        if (!kid.isConnected || !kid.parentElement) continue;
+        const pcs = getComputedStyle(kid.parentElement), pr = kid.parentElement.getBoundingClientRect();
+        const inner = pr.width - num(pcs.paddingLeft) - num(pcs.paddingRight) - num(pcs.borderLeftWidth) - num(pcs.borderRightWidth);
+        const kcs = getComputedStyle(kid), kr = kid.getBoundingClientRect();
+        const room = inner - Math.max(num(kcs.marginLeft), 0) - Math.max(num(kcs.marginRight), 0);
+        if (kr.width <= room + 0.5) continue;
+        this.writeSize(kid, Math.max(1, Math.round(room - extraOf(kcs))));
+      }
+    }
+    explain(el, want) {
+      const held = explainSize(this.ui.store, el, want, this.cap?.x);
+      if (held) this.setBlocked(held.d, held.text, held.area);
+      else this.setBlocked(null, "");
+    }
+    setBlocked(d, text, area = null) {
+      const was = this.blocked;
+      this.blocked = d;
+      this.ui.els.wblock.textContent = text;
+      this.heldArea = text ? area : null;
+      if (was) this.ui.syncRow(was);
+      if (d) {
+        this.ui.syncRow(d);
+        this.ui.revealRow(d);
+      }
+    }
+    choose(el) {
+      this.setBlocked(null, "");
+      this.target = el;
+      this.ui.els.handle.setAttribute("data-on", "");
+      this.ui.paint();
+    }
+    handleEvents(handle) {
+      handle.addEventListener("pointerdown", (e) => {
+        const el = this.target;
+        if (e.button !== 0 || !el || !resizeSupported(el)) return;
+        e.preventDefault();
+        e.stopPropagation();
+        this.ui.finishEdit();
+        const from = { x: e.clientX, w: el.getBoundingClientRect().width };
+        const session = this.start(el);
+        let want = from.w;
+        this.ui.gesture(e, (event) => {
+          want = Math.max(1, from.w + event.clientX - from.x);
+          this.width(session, want);
+          if (!this.drag) return;
+          const held = this.cap.x || Math.abs(el.getBoundingClientRect().width - want) > 1, now = performance.now();
+          if (held && (!this.ui.els.wblock.textContent || now - (this.explainedAt || 0) > 200)) {
+            this.explainedAt = now;
+            this.explain(el, want);
+          } else if (!held && this.ui.els.wblock.textContent) this.setBlocked(null, "");
+        }, (_, cancelled) => {
+          this.finish(session, cancelled);
+          this.ui.suppressClick();
+          if (!cancelled && el.isConnected) this.explain(el, want);
+        });
+      });
+      handle.addEventListener("keydown", (e) => {
+        const el = this.target;
+        if (!["ArrowLeft", "ArrowRight"].includes(e.key) || !el || !resizeSupported(el)) return;
+        e.preventDefault();
+        e.stopPropagation();
+        const session = this.start(el);
+        const want = Math.max(1, el.getBoundingClientRect().width + (e.key === "ArrowRight" ? 1 : -1) * (e.shiftKey ? 10 : 1));
+        this.width(session, want);
+        this.finish(session, false);
+        this.explain(el, want);
+      });
+    }
+    start(el) {
+      if (!this.sized.has(el)) this.sized.set(el, el.getAttribute("style"));
+      const cs = getComputedStyle(el);
+      const kids = [...this.sized.keys()].filter((kid) => kid !== el && el.contains(kid) && kid.isConnected);
+      const before = new Map([el, ...kids].map((node) => [node, node.getAttribute("style")]));
+      this.cap = { x: null, y: null };
+      this.hugs = /* @__PURE__ */ new Set();
+      this.drag = el;
+      this.ui.host.setAttribute("resizing", "");
+      return { el, kids, before, extra: extraOf(cs), limit: sizeLimits(this.ui.store, el, cs) };
+    }
+    width(session, desired) {
+      const { el, kids, before, extra, limit } = session;
+      if (!el.isConnected || helper(el)) {
+        this.cancel();
+        return;
+      }
+      if (!resizeSupported(el)) {
+        this.cancel();
+        this.setBlocked(null, "transformed: edit the CSS value instead");
+        return;
+      }
+      let w = Math.max(1, desired);
+      this.cap = { x: null, y: null };
+      if (w > limit.w) {
+        w = limit.w;
+        this.cap.x = limit.whyW;
+      }
+      if (this.writeSize(el, Math.round(w - extra))) this.cap.x ||= "parent";
+      const over = limit.parent ? overflow(el, limit.parent) : null;
+      if (over?.x > 0.5) {
+        this.writeSize(el, Math.max(1, Math.round(w - over.x - extra)));
+        this.cap.x ||= "parent";
+      }
+      for (let pass = 0; ; pass++) {
+        for (const kid of kids) this.restoreSize(kid, before.get(kid));
+        this.crush(el, kids);
+        const need = contentNeed(el);
+        if (need.x <= 1 || pass === 4) break;
+        this.writeSize(el, Math.round(el.getBoundingClientRect().width + need.x - extra), false);
+        this.cap.x = "content";
+      }
+      this.ui.paint();
+    }
+    finish(session, cancelled) {
+      if (cancelled) for (const [node, attr] of session.before) this.restoreSize(node, attr, this.wrote.get(node)?.prop);
+      else {
+        const steps = [...session.before].filter(([node, attr]) => node.isConnected && node.getAttribute("style") !== attr).map(([node, attr]) => ({ el: node, before: attr, after: this.wrote.get(node)?.attr ?? node.getAttribute("style"), prop: this.wrote.get(node)?.prop }));
+        if (steps.length) this.history.push(steps);
+      }
+      this.drag = null;
+      this.ui.host.removeAttribute("resizing");
+      this.changed();
+    }
+    changed() {
+      this.ui.dirtyHtml();
+      this.ui.queueLoad();
+      this.ui.paint();
+    }
+    reset(el, record = true) {
+      this.cancel();
+      if (!el || !this.sized.has(el)) return;
+      this.setBlocked(null, "");
+      const before = el.getAttribute("style"), prop = this.wrote.get(el)?.prop;
+      if (this.pageSized(el)) {
+        this.sized.delete(el);
+        this.wrote.delete(el);
+        this.setBlocked(null, "resize skipped: the page changed it");
+      } else {
+        this.restoreSize(el, this.sized.get(el), prop);
+        this.sized.delete(el);
+        if (record && el.getAttribute("style") !== before) this.history.push([{ el, before, after: el.getAttribute("style"), prop }]);
+      }
+      this.changed();
+    }
+    undo() {
+      this.cancel();
+      const entry = this.history.pop();
+      if (!entry) return;
+      this.setBlocked(null, "");
+      let skipped = 0;
+      for (const step of [...entry].reverse()) {
+        if (!step.el.isConnected || helper(step.el)) {
+          skipped++;
+          continue;
+        }
+        const now = sizeOf(step.el, step.el.getAttribute("style"), step.prop), expected = sizeOf(step.el, step.after, step.prop);
+        if (now.value !== expected.value || now.priority !== expected.priority) {
+          skipped++;
+          continue;
+        }
+        if (!this.sized.has(step.el)) this.sized.set(step.el, step.after);
+        this.restoreSize(step.el, step.before, step.prop);
+        if (step.el.getAttribute("style") === this.sized.get(step.el)) this.sized.delete(step.el);
+      }
+      if (skipped) this.setBlocked(null, `${skipped} resize${skipped === 1 ? "" : "s"} skipped: the page changed it`);
+      this.changed();
+    }
+    resetAll() {
+      this.cancel();
+      let skipped = 0;
+      for (const [el, attr] of this.sized) {
+        if (this.pageSized(el)) skipped++;
+        else this.restoreSize(el, attr, this.wrote.get(el)?.prop);
+      }
+      this.sized.clear();
+      this.history.clear();
+      if (skipped) this.setBlocked(null, `${skipped} resize${skipped === 1 ? "" : "s"} skipped: the page changed it`);
+      this.changed();
+    }
+    paintHold(el, chrome) {
+      const { painter } = this.ui, { r } = painter.geometry(el);
+      painter.box("dbox", r.left, r.top, r.width, r.height);
+      painter.chip(painter.label("hold", this.ui.els.wblock.textContent, 0, 0), r, chrome);
+    }
+    paintSizer(el) {
+      const { painter, els } = this.ui, { r } = painter.geometry(el);
+      painter.box("box", r.left, r.top, r.width, r.height);
+      els.wval.textContent = `${name(el)} ${fmt(r.width)} × ${fmt(r.height)}px`;
+      const supported = resizeSupported(el);
+      els.handle.disabled = !supported;
+      els.handle.setAttribute("aria-label", `Adjust the width of ${name(el)}: ${fmt(r.width)}px`);
+      if (!supported && !els.wblock.textContent) this.setBlocked(null, "transformed: edit the CSS value instead");
+      const half = els.handle.offsetWidth / 2 || 16;
+      const hx = Math.min(Math.max(r.right, half), innerWidth - half), hy = Math.min(Math.max(r.bottom, half), innerHeight - half);
+      els.handle.style.left = `${hx}px`;
+      els.handle.style.top = `${hy}px`;
+      const reset = els.hreset, w = reset.offsetWidth || 50, h = reset.offsetHeight || 20, gap = half + 6;
+      reset.toggleAttribute("data-on", this.sized.has(el));
+      reset.style.left = `${Math.max(4, hx + gap + w > innerWidth - 4 ? hx - gap - w : hx + gap)}px`;
+      reset.style.top = `${Math.max(4, Math.min(hy - h / 2, innerHeight - h - 4))}px`;
+    }
+  };
+
+  // src/tools/picker.js
+  var Picker = class {
+    constructor(ui) {
+      this.ui = ui;
+      this.picking = false;
+      this.picks = /* @__PURE__ */ new Map();
+      this.focusEl = null;
+      this.probe = null;
+      this.alt = false;
+      ui.tools.register("picking", {
+        label: "Select an element · Esc to cancel",
+        handlers: () => ({
+          move: (target, event) => {
+            this.alt = event.altKey;
+            if (target !== this.probe || this.alt !== this.altWas) {
+              this.probe = target;
+              this.altWas = this.alt;
+              ui.paint();
+            }
+          },
+          leave: () => {
+            if (this.probe) {
+              this.probe = null;
+              ui.paint();
+            }
+          },
+          click: (target) => this.select(target),
+          escape: () => {
+            this.setPicking(false);
+            ui.btn.focus();
+          },
+          key: (event) => {
+            if (event.key === "Alt" && this.alt !== (event.type === "keydown")) {
+              this.alt = event.type === "keydown";
+              ui.paint();
+            }
+          }
+        }),
+        arm: () => {
+          this.cursorStyle ||= Object.assign(document.createElement("style"), { textContent: "html, html *:not(fm-inspector) { cursor: crosshair !important; }" });
+          document.head.append(this.cursorStyle);
+        },
+        release: () => {
+          this.cursorStyle?.remove();
+          this.probe = null;
+        }
+      });
+    }
+    setPicking(on) {
+      if (on === this.picking) return;
+      this.picking = on;
+      this.ui.btn.setAttribute("aria-pressed", String(on));
+      this.ui.host.toggleAttribute("picking", on);
+      if (on) this.ui.tools.arm("picking");
+      else {
+        this.alt = false;
+        this.clear();
+        this.ui.tools.end("picking");
+      }
+    }
+    prune(isHelper) {
+      for (const [el] of this.picks) if (!el.isConnected || isHelper(el)) this.picks.delete(el);
+      if (!this.focusEl?.isConnected || isHelper(this.focusEl)) this.focusEl = [...this.picks.keys()].pop() || null;
+    }
+    select(el) {
+      let row = this.ui.rows().get(el);
+      if (!row) {
+        this.ui.loadHtml();
+        row = this.ui.rows().get(el);
+      }
+      if (!row) return;
+      const was = this.picks.has(el);
+      this.pick(el, row);
+      if (was) return;
+      this.ui.openCssFor(el);
+    }
+    pick(el, row) {
+      const on = !this.picks.has(el);
+      if (on) {
+        const used = new Set([...this.picks.values()].map((p) => p.hue));
+        let hue = 0;
+        while (used.has(hue)) hue++;
+        this.picks.set(el, { row, hue });
+        row.style.setProperty("--accent", `var(--pick-${hue % PALETTE})`);
+      } else {
+        this.picks.delete(el);
+        row.style.removeProperty("--accent");
+      }
+      this.ui.setPickedRow(row, on);
+      if (on) this.focusEl = el;
+      else if (this.focusEl === el) this.focusEl = [...this.picks.keys()].pop() || null;
+      this.ui.markHits();
+      this.ui.paint();
+    }
+    clear() {
+      for (const [, p] of this.picks) {
+        this.ui.setPickedRow(p.row, false);
+        p.row.style.removeProperty("--accent");
+      }
+      this.picks.clear();
+      this.focusEl = null;
+      this.ui.markHits();
+      this.ui.paint();
+    }
+  };
+
+  // src/panel/html-view.js
+  var HtmlView = class {
+    constructor(ui) {
+      this.ui = ui;
+      this.rows = /* @__PURE__ */ new Map();
+    }
+    setPickedRow(row, on) {
+      row.dataset.picked = String(on);
+      row.pickButton?.setAttribute("aria-pressed", String(on));
+    }
+    load() {
+      markForeign();
+      const folds = new Set([...this.rows].filter(([, row]) => row.hasAttribute("data-folded")).map(([el]) => el));
+      const focused = this.ui.activeElement()?.closest(".row")?.pageElement;
+      this.rows = /* @__PURE__ */ new Map();
+      const fragment = document.createDocumentFragment();
+      this.tree(fragment, document.body, 0);
+      this.ui.view.replaceChildren(fragment);
+      for (const el of folds) {
+        const row = this.rows.get(el);
+        if (row) this.setFolded(row, true);
+      }
+      this.ui.prune();
+      for (const [el, pick] of this.ui.picks) {
+        pick.row = this.rows.get(el);
+        if (!pick.row) continue;
+        this.setPickedRow(pick.row, true);
+        pick.row.style.setProperty("--accent", `var(--pick-${pick.hue % PALETTE})`);
+      }
+      if (focused) this.rows.get(focused)?.pickButton.focus();
+    }
+    tree(out, el, depth) {
+      const kids = [...el.childNodes].filter((n) => !skip(n));
+      const textOnly = kids.length > 0 && kids.every((n) => n.nodeType === 3);
+      const row = this.row(depth);
+      row.pageElement = el;
+      const caret = document.createElement("button");
+      caret.type = "button";
+      caret.className = "caret";
+      row.caret = caret;
+      caret.setAttribute("aria-label", "Collapse element");
+      caret.setAttribute("aria-expanded", "true");
+      const select = document.createElement("button");
+      select.type = "button";
+      select.className = "pickrow";
+      select.setAttribute("aria-pressed", "false");
+      select.setAttribute("aria-label", `Select ${name(el)}`);
+      select.append(this.openTag(el));
+      row.pickButton = select;
+      select.addEventListener("click", () => this.ui.onPick(el, row));
+      row.append(caret, select);
+      this.setPickedRow(row, false);
+      this.rows.set(el, row);
+      out.append(row);
+      if (!rendered(el)) {
+        row.classList.add("na");
+        row.title = "Not rendered on the page";
+        select.disabled = true;
+      }
+      const foldable = !VOID.has(el.localName) && kids.length > 0;
+      if (!foldable) {
+        caret.classList.add("none");
+        caret.disabled = true;
+        caret.tabIndex = -1;
+        if (!VOID.has(el.localName)) select.append(span("tag", `</${el.localName}>`));
+        return;
+      }
+      caret.addEventListener("click", () => this.setFolded(row, !row.hasAttribute("data-folded")));
+      if (textOnly) {
+        const text = squash(kids.map((n) => n.data).join(""));
+        row.tx = span("tx", text);
+        row.full = text;
+        select.append(row.tx, span("tag", `</${el.localName}>`));
+        if (text.length > TRUNC) this.setFolded(row, true);
+        else {
+          caret.classList.add("none");
+          caret.disabled = true;
+          caret.tabIndex = -1;
+        }
+        return;
+      }
+      select.append(span("fold c", "…"), span("fold tag", `</${el.localName}>`));
+      for (const n of kids) {
+        if (n.nodeType === 1) this.tree(out, n, depth + 1);
+        else {
+          const child = this.row(depth + 1);
+          child.append(span(n.nodeType === 8 ? "c" : "tx", n.nodeType === 8 ? `<!--${n.data}-->` : squash(n.data)));
+          out.append(child);
+        }
+      }
+      const close = this.row(depth);
+      close.classList.add("cl");
+      close.append(span("tag", `</${el.localName}>`));
+      out.append(close);
+      row.close = close;
+    }
+    row(depth) {
+      const row = document.createElement("div");
+      row.className = "row";
+      row.style.setProperty("--d", depth);
+      return row;
+    }
+    openTag(el) {
+      const f = span("ot", "");
+      f.append(span("tag", `<${el.localName}`));
+      for (const a of el.attributes) {
+        f.append(" ", span("an", a.name));
+        if (a.value !== "") f.append(`="${a.value}"`);
+      }
+      f.append(span("tag", ">"));
+      return f;
+    }
+    setFolded(row, on) {
+      row.toggleAttribute("data-folded", on);
+      row.caret?.setAttribute("aria-expanded", String(!on));
+      row.caret?.setAttribute("aria-label", on ? "Expand element" : "Collapse element");
+      if (row.tx) {
+        row.tx.textContent = on ? row.full.slice(0, TRUNC).trimEnd() + " …" : row.full;
+        return;
+      }
+      if (!row.close) return;
+      let n = row.nextElementSibling;
+      while (n && n !== row.close) {
+        n.hidden = on;
+        if (!on && n.hasAttribute("data-folded") && n.close) {
+          let m = n.nextElementSibling;
+          while (m && m !== n.close) {
+            m.hidden = true;
+            m = m.nextElementSibling;
+          }
+          n.close.hidden = true;
+          n = n.close;
+        }
+        n = n.nextElementSibling;
+      }
+      row.close.hidden = on;
+    }
+    reveal(el) {
+      const row = this.rows.get(el);
+      if (!row) return;
+      for (let a = el.parentElement; a && a !== document.documentElement; a = a.parentElement) {
+        const r = this.rows.get(a);
+        if (r && r.hasAttribute("data-folded")) this.setFolded(r, false);
+      }
+      if (this.ui.view.hidden) return;
+      const body = this.ui.body.getBoundingClientRect(), b = row.getBoundingClientRect();
+      if (b.top < body.top || b.bottom > body.bottom) this.ui.body.scrollTop += b.top - body.top - this.ui.body.clientHeight / 2;
+    }
+  };
+
+  // src/panel/css-view.js
+  var CssView = class {
+    constructor(ui) {
+      this.ui = ui;
+      this.rowOf = /* @__PURE__ */ new Map();
+      this.groups = [];
+      this.pins = /* @__PURE__ */ new Set();
+      this.hover = null;
+      this.editor = null;
+      this.pendingRender = false;
+    }
+    onBuilt() {
+      if (!this.editor) this.render();
+      else this.pendingRender = true;
+    }
+    dropped(d) {
+      if (this.hover === d) this.hover = null;
+    }
+    // the store dropped a declaration the page removed
+    clearMarks() {
+      this.pins.clear();
+      this.hover = null;
+      this.markHits();
+      for (const r of this.rowOf.values()) {
+        r.row.classList.remove("on");
+        r.row.querySelector(".t")?.setAttribute("aria-pressed", "false");
+      }
+    }
+    render() {
+      const { view, store } = this.ui;
+      view.replaceChildren();
+      this.hover = null;
+      this.rowOf = /* @__PURE__ */ new Map();
+      this.groups = [];
+      if (!store.sheets.length && !store.inlineNodes?.length) {
+        view.append(this.note("No stylesheet on this page."));
+        return;
+      }
+      for (const s of store.sheets) {
+        if (store.sheets.length > 1) view.append(this.comment(`/* ${s.name} */`));
+        if (s.unread) {
+          view.append(this.comment("/* stylesheet could not be read */"));
+          continue;
+        }
+        this.renderNodes(view, s.nodes, 0);
+      }
+      for (const n of store.inlineNodes || []) {
+        const el = n.model.inlineEl;
+        const matches = this.groups.filter((x) => x.node !== n && x.node.model && !x.node.model.inlineEl && store.matchModel(x.node.model, [el]).length > 0);
+        const first = matches.find((x) => !/^\*/.test(x.node.model.selector || "")) || matches[0];
+        const g = this.group(n, { depth: 0 });
+        g.classList.add("inline");
+        if (first) first.el.before(g);
+        else view.prepend(g);
+      }
+      this.markHits();
+    }
+    markHits() {
+      const { el, hue } = this.ui.focusPick();
+      for (const { node, el: g } of this.groups) {
+        let hit = false;
+        if (el && node.model) hit = this.ui.store.matchModel(node.model, [el]).length > 0;
+        g.classList.toggle("hit", hit);
+        if (hit) g.style.setProperty("--accent", `var(--pick-${hue % PALETTE})`);
+        else g.style.removeProperty("--accent");
+      }
+    }
+    scrollToHit() {
+      const hits = this.groups.filter((x) => x.el.classList.contains("hit"));
+      const first = (hits.find((x) => !/^\*/.test(x.node.model.selector || "")) || hits[0])?.el;
+      if (!first) return;
+      const body = this.ui.body.getBoundingClientRect();
+      this.ui.body.scrollTop += first.getBoundingClientRect().top - body.top - 8;
+    }
+    note(text) {
+      const n = document.createElement("div");
+      n.className = "empty";
+      n.textContent = text;
+      return n;
+    }
+    group(n, opts = {}) {
+      const g = document.createElement("div");
+      g.className = "grp";
+      g.dataset.depth = opts.depth || 0;
+      const head = document.createElement("div");
+      head.className = "gh";
+      head.append(span("sel", n.head));
+      if (n.model?.nativeFallback) head.title = "Live CSSOM values; source text differs or contains nested declarations.";
+      g.append(head);
+      for (const d of n.decls) {
+        if (d.type === "blank") continue;
+        if (d.type === "comment") {
+          g.append(this.comment(d.text));
+          continue;
+        }
+        g.append(this.declNode(d));
+      }
+      this.groups.push({ node: n, el: g });
+      if (n.children?.length) this.renderNodes(g, n.children, (opts.depth || 0) + 1);
+      return g;
+    }
+    comment(text) {
+      const c = document.createElement("div");
+      c.className = "cm";
+      c.textContent = text;
+      return c;
+    }
+    renderNodes(out, nodes, depth) {
+      for (const n of nodes) {
+        switch (n.type) {
+          case "blank":
+            break;
+          case "comment":
+            out.append(this.comment(n.text));
+            break;
+          case "flat":
+            out.append(this.comment(n.text));
+            break;
+          case "opaque":
+            out.append(this.comment(`${n.head} { … }`));
+            break;
+          case "group": {
+            const head = document.createElement("div");
+            head.className = "gh";
+            head.append(span("sel", n.head));
+            out.append(head);
+            this.renderNodes(out, n.children, depth + 1);
+            break;
+          }
+          case "rule":
+            out.append(this.group(n, { depth }));
+            break;
+        }
+      }
+    }
+    declNode(d) {
+      const row = document.createElement("div");
+      row.className = "d";
+      const text = `${d.prop}: ${d.value}${d.important ? " !important" : ""}`;
+      if (!d.live) {
+        row.classList.add("na");
+        row.title = "This declaration is unsupported or read-only";
+        row.append(span("t", text));
+        return row;
+      }
+      const box = document.createElement("input");
+      box.type = "checkbox";
+      box.checked = d.on;
+      box.setAttribute("aria-label", `${d.prop}: ${d.value}`);
+      box.addEventListener("change", () => {
+        const before = this.ui.state(d);
+        d.on = box.checked;
+        this.apply(d);
+        this.syncRow(d);
+        this.ui.record([{ d, before, after: this.ui.state(d) }]);
+      });
+      const show = document.createElement("button");
+      show.type = "button";
+      show.className = "t";
+      show.textContent = `${d.prop}: `;
+      show.setAttribute("aria-pressed", String(this.pins.has(d)));
+      show.title = `Show where ${d.model.selector || d.model.head} lands`;
+      show.addEventListener("click", () => {
+        const on = !this.pins.has(d);
+        if (on) this.pins.add(d);
+        else this.pins.delete(d);
+        show.setAttribute("aria-pressed", String(on));
+        row.classList.toggle("on", on);
+        this.ui.paint();
+      });
+      const sw = document.createElement("span");
+      sw.className = "sw";
+      const value = span("v", d.value);
+      value.tabIndex = 0;
+      value.setAttribute("role", "button");
+      value.title = "Click to change the value";
+      value.addEventListener("click", () => this.edit(d));
+      value.addEventListener("keydown", (e) => {
+        if (e.key === "Enter" || e.key === " ") {
+          e.preventDefault();
+          this.edit(d);
+        }
+      });
+      row.addEventListener("pointerenter", () => {
+        this.hover = d;
+        this.ui.paint();
+      });
+      row.addEventListener("pointerleave", () => {
+        this.hover = null;
+        this.ui.paint();
+      });
+      row.append(box, show, sw, value, span("x", d.important ? "!important" : ""));
+      row.classList.toggle("on", this.pins.has(d));
+      this.rowOf.set(d, { row, box, value, sw });
+      this.syncRow(d);
+      return row;
+    }
+    syncRow(d) {
+      const r = this.rowOf.get(d);
+      if (!r) return;
+      r.box.checked = d.on;
+      r.box.setAttribute("aria-label", `${d.prop}: ${d.value}`);
+      r.value.textContent = d.value;
+      r.row.classList.toggle("off", !d.on);
+      r.row.classList.toggle("edited", d.value !== d.orig);
+      r.row.classList.toggle("auto", !!d.auto);
+      r.row.classList.toggle("block", d === this.ui.blocked());
+      const color = isColor(d.prop, d.value);
+      r.sw.hidden = !color;
+      if (color) r.sw.style.background = d.value;
+    }
+    edit(d) {
+      if (this.editor && !this.editor.finish(false)) this.editor.finish(true);
+      const r = this.rowOf.get(d);
+      if (!r) return;
+      const { value } = r;
+      const { store, status } = this.ui;
+      const start = d.value, startOn = d.on;
+      const model = d.model, startText = model.rule.style.cssText;
+      const startAttribute = model.inlineEl?.getAttribute("style") ?? null;
+      const cancelStyle = store.scratch(model, startText);
+      let editorWrite = startText;
+      const absorbOutside = () => {
+        const live = model.rule.style.cssText;
+        for (const { prop, value: value2, priority } of store.styleChanges(store.scratch(model, editorWrite), store.scratch(model, live))) {
+          store.writeProperty(cancelStyle, prop, value2, priority);
+        }
+        editorWrite = live;
+      };
+      const field = document.createElement("input");
+      field.type = "text";
+      field.className = "ed";
+      field.value = d.value;
+      field.setAttribute("aria-label", `${d.prop} value`);
+      field.autocomplete = "off";
+      field.spellcheck = false;
+      const size = () => {
+        field.style.inlineSize = `calc(${Math.max(field.value.length, 1) + 1}ch + 12px)`;
+      };
+      const validate = () => {
+        absorbOutside();
+        const valid = this.change(d, field.value);
+        if (valid) editorWrite = model.rule.style.cssText;
+        field.setAttribute("aria-invalid", String(!valid));
+        field.setCustomValidity(valid ? "" : "Enter a valid CSS value.");
+        status.textContent = valid ? "" : "Invalid CSS value. Correct it, or press Escape to cancel.";
+        return valid;
+      };
+      const set = (v) => {
+        field.value = v;
+        size();
+        return validate();
+      };
+      field.addEventListener("input", () => {
+        size();
+        validate();
+      });
+      field.addEventListener("keydown", (e) => {
+        if (e.key === "Enter") {
+          e.preventDefault();
+          finish(false, true);
+        } else if (e.key === "Escape") {
+          e.preventDefault();
+          e.stopPropagation();
+          finish(true, true);
+        } else if (e.key === "ArrowUp" || e.key === "ArrowDown") {
+          const m = field.value.match(/-?\d*\.?\d+/);
+          if (!m) return;
+          e.preventDefault();
+          const step = (e.key === "ArrowUp" ? 1 : -1) * (e.shiftKey ? 10 : e.altKey ? 0.1 : 1);
+          const n = Math.round((parseFloat(m[0]) + step) * 1e3) / 1e3;
+          set(field.value.slice(0, m.index) + n + field.value.slice(m.index + m[0].length));
+        }
+      });
+      let finished = false;
+      const keys = new AbortController();
+      const finish = (cancel, restoreFocus = false) => {
+        if (finished) return true;
+        if (!cancel && !validate()) {
+          if (restoreFocus) field.focus();
+          return false;
+        }
+        finished = true;
+        keys.abort();
+        if (!cancel && (d.value !== start || d.on !== startOn)) this.ui.record([{ d, before: { value: start, on: startOn, important: d.important }, after: this.ui.state(d) }]);
+        if (cancel) {
+          absorbOutside();
+          store.rebaseBaseline(model);
+          if (model.inlineEl && cancelStyle.cssText === startText) {
+            if (startAttribute == null) model.inlineEl.removeAttribute("style");
+            else model.inlineEl.setAttribute("style", startAttribute);
+          } else model.rule.style.cssText = cancelStyle.cssText;
+          d.value = start;
+          d.on = startOn;
+          const originally = store.scratch(model, startText);
+          if (startOn && (originally.getPropertyValue(d.prop) !== cancelStyle.getPropertyValue(d.prop) || originally.getPropertyPriority(d.prop) !== cancelStyle.getPropertyPriority(d.prop))) {
+            d.value = cancelStyle.getPropertyValue(d.prop) || start;
+            d.on = cancelStyle.getPropertyValue(d.prop) !== "";
+            d.important = cancelStyle.getPropertyPriority(d.prop) === "important";
+          }
+          model.sourceText = store.scratch(model, store.declarationText(model)).cssText;
+          model.lastApplied = model.rule.style.cssText;
+          this.ui.queueLoad();
+          this.markHits();
+          this.ui.paint();
+        }
+        status.textContent = "";
+        field.replaceWith(value);
+        this.syncRow(d);
+        if (this.editor?.field === field) this.editor = null;
+        if (restoreFocus) value.focus();
+        if (this.pendingRender) {
+          this.pendingRender = false;
+          this.render();
+          if (restoreFocus) this.rowOf.get(d)?.value.focus();
+        }
+        return true;
+      };
+      addEventListener("keydown", (e) => {
+        if (e.key !== "Escape") return;
+        e.preventDefault();
+        e.stopImmediatePropagation();
+        finish(true, true);
+      }, { capture: true, signal: keys.signal });
+      this.editor = { field, finish, declaration: d };
+      field.addEventListener("blur", () => finish(false));
+      size();
+      value.replaceWith(field);
+      field.focus();
+      field.select();
+    }
+    change(d, value) {
+      value = value.trim();
+      if (!value || !this.ui.store.validValue(d, value)) return false;
+      d.value = value;
+      d.on = true;
+      this.apply(d);
+      return true;
+    }
+    apply(d) {
+      this.ui.store.write(d);
+      for (const entry of d.model.decls) if (entry.type === "decl") this.syncRow(entry);
+      this.markHits();
+      this.ui.paint();
+    }
+  };
+
   // src/main.js
-  var VERSION = "0.1.76";
+  var VERSION = "0.1.79";
   var Inspector = class extends HTMLElement {
     connectedCallback() {
       if (this.shadowRoot) {
@@ -1404,7 +2652,7 @@ ${body}`);
       const tpl = document.createElement("template");
       tpl.innerHTML = MARKUP;
       root.append(tpl.content);
-      const $ = (s) => root.querySelector(s);
+      const $ = (s) => root.querySelector(s), self = this;
       this.fab = $(".fab");
       this.byeBtn = $(".bye");
       this.pickBtn = $(".pickbtn");
@@ -1413,7 +2661,6 @@ ${body}`);
       this.wval = $(".wval");
       this.wblock = $(".wblock");
       this.sizetools = $(".sizetools");
-      this.blocked = null;
       this.handle = $(".hd");
       this.stateText = $(".state");
       this.tools = new Tools({
@@ -1425,85 +2672,50 @@ ${body}`);
           this.stateText.textContent = text;
         }
       });
-      this.tools.register("sizing", {
-        label: "Click an element to resize · Esc to end",
-        handlers: () => ({
-          click: (target) => this.chooseSize(target),
-          escape: () => {
-            this.setSizing(false);
-            this.sizeBtn.focus();
-          }
-        }),
-        release: () => this.cancelResize()
-        // a running drag ends when the tool changes hands or closes
-      });
-      this.tools.register("picking", {
-        label: "Select an element · Esc to cancel",
-        handlers: () => ({
-          move: (target, event) => {
-            this.alt = event.altKey;
-            if (target !== this.probe || this.alt !== this.altWas) {
-              this.probe = target;
-              this.altWas = this.alt;
-              this.paint();
-            }
-          },
-          leave: () => {
-            if (this.probe) {
-              this.probe = null;
-              this.paint();
-            }
-          },
-          click: (target) => this.select(target),
-          escape: () => {
-            this.setPicking(false);
-            this.pickBtn.focus();
-          },
-          key: (event) => {
-            if (event.key === "Alt" && this.alt !== (event.type === "keydown")) {
-              this.alt = event.type === "keydown";
-              this.paint();
-            }
-          }
-        }),
-        arm: () => {
-          this.cursorStyle ||= Object.assign(document.createElement("style"), { textContent: "html, html *:not(fm-inspector) { cursor: crosshair !important; }" });
-          document.head.append(this.cursorStyle);
+      this.hresetBtn = $(".hreset");
+      this.sundoBtn = $(".sundo");
+      this.painter = new Painter($(".ov"));
+      this.resize = new Resizer({
+        host: this,
+        els: { btn: this.sizeBtn, handle: this.handle, wval: this.wval, wblock: this.wblock, hreset: this.hresetBtn, sundo: this.sundoBtn, sreset: $(".sreset") },
+        tools: this.tools,
+        painter: this.painter,
+        get store() {
+          return self.store;
         },
-        release: () => {
-          this.cursorStyle?.remove();
-          this.probe = null;
+        paint: () => this.paint(),
+        queueLoad: () => this.queueLoad(),
+        dirtyHtml: () => {
+          this.htmlDirty = true;
+        },
+        syncRow: (d) => this.syncRow(d),
+        revealRow: (d) => {
+          if (this.hasAttribute("open") && this.views.css.hidden) {
+            this.fold(false);
+            this.show("css");
+          }
+          const row = this.rowOf.get(d)?.row;
+          if (row && !this.views.css.hidden) row.scrollIntoView({ block: "center" });
+        },
+        gesture: (e, move, done) => this.gesture(e, move, done),
+        suppressClick: () => this.suppressClick(),
+        cancelGesture: () => this.cancelGesture?.(),
+        finishEdit: () => {
+          if (this.editor && !this.editor.finish(false)) this.editor.finish(true);
         }
       });
-      this.sizing = false;
-      this.sizeTarget = null;
-      this.sized = /* @__PURE__ */ new Map();
-      this.wrote = /* @__PURE__ */ new WeakMap();
-      this.sizeHandle(this.handle);
-      this.hresetBtn = $(".hreset");
       this.hresetBtn.addEventListener("click", () => {
-        this.sizeReset(this.sizeTarget);
+        this.resize.reset(this.resize.target);
         this.editor?.finish(true);
         this.reset();
-        this.setBlocked(null, "");
+        this.resize.setBlocked(null, "");
       });
-      this.sizeHistory = new History((n) => {
-        this.sundoBtn.disabled = !n;
-      });
-      this.sundoBtn = $(".sundo");
-      this.sundoBtn.addEventListener("click", () => this.sizeUndo());
-      $(".sreset").addEventListener("click", () => this.sizeResetAll());
       $(".rreset").addEventListener("click", () => {
         this.editor?.finish(true);
         this.reset();
-        this.setBlocked(null, "");
+        this.resize.setBlocked(null, "");
       });
       this.measuring = false;
-      this.rows = /* @__PURE__ */ new Map();
-      this.picking = false;
-      this.alt = false;
-      this.probe = null;
-      this.focusEl = null;
       this.panel = $(".panel");
       this.head = $(".head");
       this.body = $(".body");
@@ -1515,32 +2727,62 @@ ${body}`);
       });
       this.themeBtn = $(".theme");
       this.status = $(".status");
-      this.ov = $(".ov");
-      this.painter = new Painter(this.ov);
       this.pickSurface = $(".pick-surface");
       this.tabs = [...root.querySelectorAll('[role="tab"]')];
       this.views = { html: $("#view-html"), css: $("#view-css") };
+      this.picker = new Picker({
+        host: this,
+        btn: this.pickBtn,
+        tools: this.tools,
+        rows: () => this.htmlView.rows,
+        loadHtml: () => this.loadHtml(),
+        setPickedRow: (row, on) => this.htmlView.setPickedRow(row, on),
+        openCssFor: (el) => {
+          this.fold(false);
+          this.htmlView.reveal(el);
+          this.show("css");
+          this.scrollToHit();
+        },
+        markHits: () => this.markHits(),
+        paint: () => this.paint()
+      });
+      this.htmlView = new HtmlView({
+        view: this.views.html,
+        body: this.body,
+        activeElement: () => root.activeElement,
+        picks: this.picker.picks,
+        onPick: (el, row) => this.picker.pick(el, row),
+        prune: () => this.prunePicks()
+      });
       this.store = new CssStore({
-        ownNode: (node) => node === this.cursorStyle,
+        ownNode: (node) => node === this.picker.cursorStyle,
         signal: () => this.runtime.signal,
         alive: () => this.isConnected,
-        sized: this.sized,
+        sized: this.resize.sized,
         built: () => {
-          if (!this.editor) this.renderCss();
-          else this.pendingCssRender = true;
+          this.cssView.onBuilt();
           this.paint();
         },
-        keep: (model) => model.decls.some((d) => this.pins.has(d) || this.hover === d || this.editor?.declaration === d) || this.blocked?.model === model || this.history.some((entry) => entry.some((step) => step.d.model === model)),
+        keep: (model) => model.decls.some((d) => this.pins.has(d) || this.hover === d || this.editor?.declaration === d) || this.resize.blocked?.model === model || this.history.some((entry) => entry.some((step) => step.d.model === model)),
         // the undo history, or the blocked-resize mark, still points at it
         held: (d) => this.pins.has(d) || this.editor?.declaration === d,
-        dropped: (d) => {
-          if (this.hover === d) this.hover = null;
-        }
+        dropped: (d) => this.cssView.dropped(d)
       });
-      this.rowOf = /* @__PURE__ */ new Map();
-      this.picks = /* @__PURE__ */ new Map();
-      this.pins = /* @__PURE__ */ new Set();
-      this.hover = null;
+      this.cssView = new CssView({
+        view: this.views.css,
+        body: this.body,
+        store: this.store,
+        status: this.status,
+        focusPick: () => {
+          const el = this.picker.focusEl;
+          return { el, hue: el ? this.picker.picks.get(el)?.hue : null };
+        },
+        blocked: () => this.resize.blocked,
+        record: (entry) => this.record(entry),
+        state: (d) => this.state(d),
+        queueLoad: () => this.queueLoad(),
+        paint: () => this.paint()
+      });
       this.loaded = false;
       this.ro = new ResizeObserver(() => this.paint());
       this.watched = /* @__PURE__ */ new Set();
@@ -1632,7 +2874,7 @@ ${body}`);
       globalThis.visualViewport?.addEventListener("resize", this.onResize, { signal });
       this.mo = new MutationObserver((records) => {
         if (records.some((r) => r.type === "childList" && ROOTS().includes(r.target))) markForeign();
-        const ours = (n) => n === this.cursorStyle || helper(n?.nodeType === 1 ? n : n?.parentElement);
+        const ours = (n) => n === this.picker.cursorStyle || helper(n?.nodeType === 1 ? n : n?.parentElement);
         const own = (r) => ours(r.target) || r.type === "childList" && [...r.addedNodes, ...r.removedNodes].length > 0 && [...r.addedNodes, ...r.removedNodes].every(ours);
         const ignoreFlip = (r) => r.type === "attributes" && r.attributeName === "data-fm-inspector-ignore";
         if (records.every((r) => own(r) && !ignoreFlip(r))) return;
@@ -1663,8 +2905,8 @@ ${body}`);
     dispose() {
       if (!this.connected) return;
       this.cancelGesture?.();
-      this.setPicking(false);
-      this.setSizing(false);
+      this.picker.setPicking(false);
+      this.resize.setSizing(false);
       this.setMeasuring(false);
       this.connected = false;
       this.runtime.abort();
@@ -1682,16 +2924,8 @@ ${body}`);
       this.dragged = false;
     }
     prunePicks() {
-      for (const [el] of this.picks) if (!el.isConnected || helper(el)) this.picks.delete(el);
-      if (!this.focusEl?.isConnected || helper(this.focusEl)) this.focusEl = [...this.picks.keys()].pop() || null;
-      for (const el of this.sized.keys()) if (!el.isConnected || helper(el)) this.sized.delete(el);
-      if (this.sizeTarget && (!this.sizeTarget.isConnected || helper(this.sizeTarget))) {
-        this.cancelResize();
-        this.sizeTarget = null;
-        this.handle.removeAttribute("data-on");
-        this.hresetBtn.removeAttribute("data-on");
-        this.wval.textContent = "";
-      }
+      this.picker.prune(helper);
+      this.resize.prune();
     }
     gesture(e, move, done, capture = true) {
       this.cancelGesture?.();
@@ -1957,621 +3191,83 @@ ${body}`);
       });
       return this.loading;
     }
-    /* ---------- HTML tab: the body as rows ---------- */
-    setPickedRow(row, on) {
-      row.dataset.picked = String(on);
-      row.pickButton?.setAttribute("aria-pressed", String(on));
+    /* ---------- the HTML tab lives in panel/html-view.js, the picker in tools/picker.js; this is the surface the panel and the drivers reach them by ---------- */
+    get rows() {
+      return this.htmlView.rows;
     }
     loadHtml() {
-      markForeign();
-      const folds = new Set([...this.rows].filter(([, row]) => row.hasAttribute("data-folded")).map(([el]) => el));
-      const focused = this.shadowRoot.activeElement?.closest(".row")?.pageElement;
-      this.rows = /* @__PURE__ */ new Map();
-      const fragment = document.createDocumentFragment();
-      this.tree(fragment, document.body, 0);
-      this.views.html.replaceChildren(fragment);
-      for (const el of folds) {
-        const row = this.rows.get(el);
-        if (row) this.setFolded(row, true);
-      }
-      this.prunePicks();
-      for (const [el, pick] of this.picks) {
-        pick.row = this.rows.get(el);
-        if (!pick.row) continue;
-        this.setPickedRow(pick.row, true);
-        pick.row.style.setProperty("--accent", `var(--pick-${pick.hue % PALETTE})`);
-      }
-      if (focused) this.rows.get(focused)?.pickButton.focus();
+      this.htmlView.load();
       this.htmlDirty = false;
     }
-    tree(out, el, depth) {
-      const kids = [...el.childNodes].filter((n) => !skip(n));
-      const textOnly = kids.length > 0 && kids.every((n) => n.nodeType === 3);
-      const row = this.row(depth);
-      row.pageElement = el;
-      const caret = document.createElement("button");
-      caret.type = "button";
-      caret.className = "caret";
-      row.caret = caret;
-      caret.setAttribute("aria-label", "Collapse element");
-      caret.setAttribute("aria-expanded", "true");
-      const select = document.createElement("button");
-      select.type = "button";
-      select.className = "pickrow";
-      select.setAttribute("aria-pressed", "false");
-      select.setAttribute("aria-label", `Select ${name(el)}`);
-      select.append(this.openTag(el));
-      row.pickButton = select;
-      select.addEventListener("click", () => this.pick(el, row));
-      row.append(caret, select);
-      this.setPickedRow(row, false);
-      this.rows.set(el, row);
-      out.append(row);
-      if (!rendered(el)) {
-        row.classList.add("na");
-        row.title = "Not rendered on the page";
-        select.disabled = true;
-      }
-      const foldable = !VOID.has(el.localName) && kids.length > 0;
-      if (!foldable) {
-        caret.classList.add("none");
-        caret.disabled = true;
-        caret.tabIndex = -1;
-        if (!VOID.has(el.localName)) select.append(span("tag", `</${el.localName}>`));
-        return;
-      }
-      caret.addEventListener("click", () => this.setFolded(row, !row.hasAttribute("data-folded")));
-      if (textOnly) {
-        const text = squash(kids.map((n) => n.data).join(""));
-        row.tx = span("tx", text);
-        row.full = text;
-        select.append(row.tx, span("tag", `</${el.localName}>`));
-        if (text.length > TRUNC) this.setFolded(row, true);
-        else {
-          caret.classList.add("none");
-          caret.disabled = true;
-          caret.tabIndex = -1;
-        }
-        return;
-      }
-      select.append(span("fold c", "…"), span("fold tag", `</${el.localName}>`));
-      for (const n of kids) {
-        if (n.nodeType === 1) this.tree(out, n, depth + 1);
-        else {
-          const child = this.row(depth + 1);
-          child.append(span(n.nodeType === 8 ? "c" : "tx", n.nodeType === 8 ? `<!--${n.data}-->` : squash(n.data)));
-          out.append(child);
-        }
-      }
-      const close = this.row(depth);
-      close.classList.add("cl");
-      close.append(span("tag", `</${el.localName}>`));
-      out.append(close);
-      row.close = close;
+    get picks() {
+      return this.picker.picks;
     }
-    row(depth) {
-      const row = document.createElement("div");
-      row.className = "row";
-      row.style.setProperty("--d", depth);
-      return row;
+    get focusEl() {
+      return this.picker.focusEl;
     }
-    openTag(el) {
-      const f = span("ot", "");
-      f.append(span("tag", `<${el.localName}`));
-      for (const a of el.attributes) {
-        f.append(" ", span("an", a.name));
-        if (a.value !== "") f.append(`="${a.value}"`);
-      }
-      f.append(span("tag", ">"));
-      return f;
+    get probe() {
+      return this.picker.probe;
     }
-    setFolded(row, on) {
-      row.toggleAttribute("data-folded", on);
-      row.caret?.setAttribute("aria-expanded", String(!on));
-      row.caret?.setAttribute("aria-label", on ? "Expand element" : "Collapse element");
-      if (row.tx) {
-        row.tx.textContent = on ? row.full.slice(0, TRUNC).trimEnd() + " …" : row.full;
-        return;
-      }
-      if (!row.close) return;
-      let n = row.nextElementSibling;
-      while (n && n !== row.close) {
-        n.hidden = on;
-        if (!on && n.hasAttribute("data-folded") && n.close) {
-          let m = n.nextElementSibling;
-          while (m && m !== n.close) {
-            m.hidden = true;
-            m = m.nextElementSibling;
-          }
-          n.close.hidden = true;
-          n = n.close;
-        }
-        n = n.nextElementSibling;
-      }
-      row.close.hidden = on;
+    get alt() {
+      return this.picker.alt;
     }
-    reveal(el) {
-      const row = this.rows.get(el);
-      if (!row) return;
-      for (let a = el.parentElement; a && a !== document.documentElement; a = a.parentElement) {
-        const r = this.rows.get(a);
-        if (r && r.hasAttribute("data-folded")) this.setFolded(r, false);
-      }
-      if (this.views.html.hidden) return;
-      const body = this.body.getBoundingClientRect(), b = row.getBoundingClientRect();
-      if (b.top < body.top || b.bottom > body.bottom) this.body.scrollTop += b.top - body.top - this.body.clientHeight / 2;
+    get picking() {
+      return this.picker.picking;
     }
-    /* ---------- the picker: choose an element on the page itself ---------- */
-    /* ---------- the resize tool: one element at a time, by its handles ---------- */
+    setPicking(on) {
+      this.picker.setPicking(on);
+    }
+    select(el) {
+      this.picker.select(el);
+    }
+    pick(el, row) {
+      this.picker.pick(el, row);
+    }
+    clearPicks() {
+      this.picker.clear();
+    }
+    /* ---------- the resize tool lives in tools/resize.js; this is the surface the panel and the drivers reach it by ---------- */
+    get sizing() {
+      return this.resize.sizing;
+    }
+    get sizeTarget() {
+      return this.resize.target;
+    }
+    get sized() {
+      return this.resize.sized;
+    }
+    get sizeDrag() {
+      return this.resize.drag;
+    }
+    get blocked() {
+      return this.resize.blocked;
+    }
     setSizing(on) {
-      if (on === this.sizing) return;
-      if (!on) this.cancelResize();
-      this.sizing = on;
-      this.sizeBtn.setAttribute("aria-pressed", String(on));
-      this.toggleAttribute("sizing", on);
-      if (on) this.tools.arm("sizing");
-      else {
-        this.sizeTarget = null;
-        this.setBlocked(null, "");
-        this.handle.removeAttribute("data-on");
-        this.hresetBtn.removeAttribute("data-on");
-        this.wval.textContent = "";
-        this.tools.end("sizing");
-      }
-      this.paint();
-    }
-    writeSize(el, px, snap = true) {
-      const base = this.parentBase(el), prop = this.sizeProp(el);
-      if (base > 0 && !snap) px = Math.min(px, Math.round(base));
-      let value;
-      if (base > 0 && snap && px >= base - 0.5) {
-        const cs = getComputedStyle(el);
-        const extra = cs.boxSizing === "content-box" ? num(cs.paddingLeft) + num(cs.paddingRight) + num(cs.borderLeftWidth) + num(cs.borderRightWidth) : 0;
-        value = extra ? `calc(100% - ${fmt(extra)}px)` : "100%";
-      } else value = `${Math.max(1, px)}px`;
-      el.style.setProperty(prop, value, el.style.getPropertyPriority(prop));
-      this.wrote.set(el, { attr: el.getAttribute("style"), prop });
-      return base > 0 && px > base + 0.5;
-    }
-    sizeProp(el) {
-      return /^(vertical|sideways)/.test(getComputedStyle(el).writingMode) ? "block-size" : "inline-size";
-    }
-    sizeOf(el, attr, prop = this.sizeProp(el)) {
-      const style = document.createElement("div").style;
-      style.cssText = attr || "";
-      return { prop, value: style.getPropertyValue(prop), priority: style.getPropertyPriority(prop), cssText: style.cssText };
-    }
-    restoreSize(el, attr, prop = this.sizeProp(el)) {
-      if (!el.isConnected) return;
-      const want = this.sizeOf(el, attr, prop);
-      this.store.writeProperty(el.style, want.prop, want.value, want.priority);
-      if (el.style.cssText === want.cssText) this.restoreStyle(el, attr);
-      this.wrote.set(el, { attr: el.getAttribute("style"), prop });
-    }
-    pageSized(el) {
-      const ours = this.wrote.get(el);
-      if (!ours) return false;
-      const now = this.sizeOf(el, el.getAttribute("style"), ours.prop), expected = this.sizeOf(el, ours.attr, ours.prop);
-      return now.value !== expected.value || now.priority !== expected.priority;
-    }
-    cancelResize() {
-      if (this.sizeDrag) this.cancelGesture?.();
-    }
-    resizeSupported(el) {
-      for (let node = el; node; node = node.parentElement) {
-        const cs = getComputedStyle(node);
-        if (cs.transform !== "none" || cs.zoom && cs.zoom !== "normal" && num(cs.zoom) !== 1) return false;
-      }
-      return true;
-    }
-    parentBase(el) {
-      const parent = el.parentElement, cs = getComputedStyle(el);
-      if (!parent || /absolute|fixed/.test(cs.position) || cs.display === "inline") return 0;
-      const pcs = getComputedStyle(parent);
-      if (/grid/.test(pcs.display) && this.sizeLimits(el, cs).whyW !== "grid") return 0;
-      return parent.getBoundingClientRect().width - num(pcs.paddingLeft) - num(pcs.paddingRight) - num(pcs.borderLeftWidth) - num(pcs.borderRightWidth);
-    }
-    crush(el, kids) {
-      const depth = (node) => {
-        let n = 0;
-        for (let p = node; p && p !== el; p = p.parentElement) n++;
-        return n;
-      };
-      for (const kid of [...kids].sort((a, b) => depth(a) - depth(b))) {
-        if (!kid.isConnected || !kid.parentElement) continue;
-        const pcs = getComputedStyle(kid.parentElement), pr = kid.parentElement.getBoundingClientRect();
-        const inner = pr.width - num(pcs.paddingLeft) - num(pcs.paddingRight) - num(pcs.borderLeftWidth) - num(pcs.borderRightWidth);
-        const kcs = getComputedStyle(kid), kr = kid.getBoundingClientRect();
-        const room = inner - Math.max(num(kcs.marginLeft), 0) - Math.max(num(kcs.marginRight), 0);
-        if (kr.width <= room + 0.5) continue;
-        const extra = kcs.boxSizing === "content-box" ? num(kcs.paddingLeft) + num(kcs.paddingRight) + num(kcs.borderLeftWidth) + num(kcs.borderRightWidth) : 0;
-        this.writeSize(kid, Math.max(1, Math.round(room - extra)));
-      }
-    }
-    sizeLimits(el, cs) {
-      const parent = el.parentElement;
-      const out = { w: Infinity, whyW: null, parent: null };
-      if (!parent || /absolute|fixed/.test(cs.position)) return out;
-      out.parent = parent;
-      const pcs = getComputedStyle(parent);
-      if (/grid/.test(pcs.display)) {
-        const decl = this.declaredOn(parent, ["grid-template-columns", "grid-template", "grid"]);
-        const sizes = pcs.gridTemplateColumns.split(" ").map(num).filter((n) => n > 0), gap = num(pcs.columnGap);
-        if (decl && sizes.length) {
-          const tokens = this.trackTokens(decl.value), pr = parent.getBoundingClientRect(), r = el.getBoundingClientRect();
-          let x = pr.left + num(pcs.borderLeftWidth) + num(pcs.paddingLeft), first = -1, last = -1, width = 0;
-          sizes.forEach((size, i) => {
-            const overlaps = x + size > r.left + 0.5 && x < r.right - 0.5;
-            if (overlaps) {
-              if (first < 0) first = i;
-              last = i;
-              width += size + (first < i ? gap : 0);
-            }
-            x += size + gap;
-          });
-          const fixed = (t) => /^(\d|\.)/.test(t) && /(px|%|em|rem|vw|vh|vmin|vmax|fr|ch|ex)$/.test(t) || /^minmax\(.*,\s*(\d|\.)[^)]*(px|%|em|rem|vw|vh|fr|ch)\)$/.test(t);
-          if (first >= 0 && tokens.length && Array.from({ length: last - first + 1 }, (_, k) => tokens[Math.min(first + k, tokens.length - 1)]).every(fixed)) {
-            out.w = width;
-            out.whyW = "grid";
-          }
-        }
-      }
-      return out;
-    }
-    declaredOn(el, props) {
-      const models = this.store.models.filter((m) => !m.inlineEl && this.store.matchModel(m, [el]).length > 0);
-      for (const m of models.reverse()) for (const d of [...m.decls].reverse()) if (d.type === "decl" && d.on && d.live && props.includes(d.prop)) return d;
-      return null;
-    }
-    trackTokens(value, limit = 2048) {
-      const tokens = [];
-      let depth = 0, brackets = 0, quote = null, token = "";
-      const source = value.replace(/\/\*[\s\S]*?\*\//g, "");
-      for (let i = 0; i < source.length; i++) {
-        const ch = source[i];
-        if (quote) {
-          token += ch;
-          if (ch === "\\") token += source[++i] || "";
-          else if (ch === quote) quote = null;
-          continue;
-        }
-        if (ch === '"' || ch === "'") quote = ch;
-        else if (ch === "(") depth++;
-        else if (ch === ")") depth = Math.max(0, depth - 1);
-        else if (ch === "[") brackets++;
-        else if (ch === "]") brackets = Math.max(0, brackets - 1);
-        if (/\s/.test(ch) && !depth && !brackets) {
-          if (token) tokens.push(token);
-          token = "";
-        } else token += ch;
-      }
-      if (token) tokens.push(token);
-      const out = [];
-      for (const item of tokens) {
-        if (out.length >= limit) break;
-        if (/^\[.*\]$/.test(item)) continue;
-        const repeat = item.match(/^repeat\((auto-fill|auto-fit|\d+),\s*(.*)\)$/);
-        if (!repeat) {
-          out.push(item);
-          continue;
-        }
-        const inner = this.trackTokens(repeat[2], limit - out.length);
-        if (!inner.length) continue;
-        const count = /^\d+$/.test(repeat[1]) ? Math.min(Number(repeat[1]), Math.ceil((limit - out.length) / inner.length)) : 1;
-        for (let n = 0; n < count && out.length < limit; n++) out.push(...inner.slice(0, limit - out.length));
-      }
-      return out;
-    }
-    contentNeed(el) {
-      const cs = getComputedStyle(el), out = { x: 0, y: 0 };
-      if (cs.display === "inline" || !el.scrollWidth) return out;
-      if (cs.overflowX === "visible") out.x = el.scrollWidth - el.clientWidth;
-      if (cs.overflowY === "visible") out.y = el.scrollHeight - el.clientHeight;
-      return out;
-    }
-    overflow(el, parent) {
-      const r = el.getBoundingClientRect(), pr = parent.getBoundingClientRect(), pcs = getComputedStyle(parent), cs = getComputedStyle(el);
-      const right = pr.right - num(pcs.paddingRight) - num(pcs.borderRightWidth), bottom = pr.bottom - num(pcs.paddingBottom) - num(pcs.borderBottomWidth);
-      return { x: r.right + Math.max(num(cs.marginRight), 0) - right, y: r.bottom + Math.max(num(cs.marginBottom), 0) - bottom };
-    }
-    explainSize(el, wantW) {
-      const r = el.getBoundingClientRect(), cs = getComputedStyle(el), parent = el.parentElement, pcs = parent ? getComputedStyle(parent) : null;
-      const axes = Math.abs(wantW - r.width) > 1 ? [{ axis: "x", want: wantW, got: r.width }] : [];
-      this.setBlocked(null, "");
-      if (!axes.length) return;
-      const rendered2 = (x) => this.store.matchModel(x, [el]).length > 0;
-      const own = this.store.models.filter((m) => !m.inlineEl && m.decls.some((d) => d.type === "decl" && d.on) && rendered2(m));
-      const above = parent ? this.store.models.filter((m) => !m.inlineEl && m.decls.some((d) => d.type === "decl" && d.on) && this.store.matchModel(m, [parent]).length > 0) : [];
-      const find = (models, props) => {
-        for (const m of [...models].reverse()) for (const d of [...m.decls].reverse()) if (d.type === "decl" && d.on && d.live && props.includes(d.prop)) return d;
-        return null;
-      };
-      const flex = /flex/.test(pcs?.display || ""), grid = /grid/.test(pcs?.display || ""), row = !/column/.test(pcs?.flexDirection || "");
-      for (const { axis, want, got } of axes) {
-        const x = axis === "x";
-        const cap = this.sizeCap?.[axis];
-        const maxP = x ? ["max-width", "max-inline-size"] : ["max-height", "max-block-size"], minP = x ? ["min-width", "min-inline-size"] : ["min-height", "min-block-size"];
-        const maxC = x ? cs.maxWidth : cs.maxHeight, minC = x ? cs.minWidth : cs.minHeight;
-        const pad = cs.boxSizing === "content-box" ? x ? num(cs.paddingLeft) + num(cs.paddingRight) + num(cs.borderLeftWidth) + num(cs.borderRightWidth) : num(cs.paddingTop) + num(cs.paddingBottom) + num(cs.borderTopWidth) + num(cs.borderBottomWidth) : 0;
-        if (maxC !== "none" && got < want && Math.abs(num(maxC) + pad - got) <= 1) {
-          const d2 = find(own, maxP);
-          this.setBlocked(d2, `held by ${d2 ? `${d2.prop}: ${d2.value}` : `${maxP[0]}: ${maxC}`}`);
-          return;
-        }
-        if (minC !== "auto" && num(minC) > 0 && got > want && Math.abs(num(minC) + pad - got) <= 1) {
-          const d2 = find(own, minP);
-          this.setBlocked(d2, `held by ${d2 ? `${d2.prop}: ${d2.value}` : `${minP[0]}: ${minC}`}`);
-          return;
-        }
-        if (cap === "content") {
-          const er = el.getBoundingClientRect();
-          const child = [...el.children].filter((c) => !helper(c)).sort((a, b) => {
-            const ra = a.getBoundingClientRect(), rb = b.getBoundingClientRect();
-            return x ? rb.right - ra.right : rb.bottom - ra.bottom;
-          })[0];
-          const d2 = child ? this.store.models.find((m) => m.inlineEl === child)?.decls.find((k) => k.type === "decl" && k.on && k.prop === (x ? "inline-size" : "block-size")) || null : null;
-          this.setBlocked(d2, `held by content${child ? `: ${name(child)}` : ""}`, child || null);
-          return;
-        }
-        if (cap) {
-          const d2 = cap === "grid" ? find(above, x ? ["grid-template-columns", "grid-auto-columns", "grid-template", "grid"] : ["grid-template-rows", "grid-auto-rows", "grid-template", "grid"]) : find(above, x ? ["width", "inline-size", "max-width", "max-inline-size"] : ["height", "block-size", "max-height", "max-block-size"]);
-          if (cap === "grid") {
-            this.setBlocked(d2, `grid track${d2 ? `: ${d2.value}` : ""}`, parent);
-            return;
-          }
-          if (d2) {
-            this.setBlocked(d2, `${name(parent)}: ${d2.prop}: ${d2.value}`, parent);
-            return;
-          }
-          const gp = parent?.parentElement, gcs = gp ? getComputedStyle(gp) : null;
-          if (gcs && /grid/.test(gcs.display)) {
-            const g = this.declaredOn(gp, ["place-items", "justify-items"]) || this.declaredOn(parent, ["justify-self", "place-self"]) || this.declaredOn(gp, ["display"]);
-            this.setBlocked(g, `${name(gp)} grid${g ? `: ${g.prop}: ${g.value}` : ""}`, parent);
-            return;
-          }
-          if (gcs && /flex/.test(gcs.display)) {
-            const g = this.declaredOn(parent, ["flex", "flex-grow"]) || this.declaredOn(gp, ["display"]);
-            this.setBlocked(g, `${name(gp)} flex${g ? `: ${g.prop}: ${g.value}` : ""}`, parent);
-            return;
-          }
-          this.setBlocked(null, `${name(parent)}: content-sized`, parent);
-          return;
-        }
-        const max = x ? ["max-width", "max-inline-size"] : ["max-height", "max-block-size"], min = x ? ["min-width", "min-inline-size"] : ["min-height", "min-block-size"];
-        const size = x ? ["width", "inline-size"] : ["height", "block-size"];
-        const maxV = x ? cs.maxWidth : cs.maxHeight, minV = x ? cs.minWidth : cs.minHeight;
-        let d = null, note = "";
-        if (maxV !== "none" && got < want && Math.abs(num(maxV) + (cs.boxSizing === "content-box" ? x ? num(cs.paddingLeft) + num(cs.paddingRight) + num(cs.borderLeftWidth) + num(cs.borderRightWidth) : num(cs.paddingTop) + num(cs.paddingBottom) + num(cs.borderTopWidth) + num(cs.borderBottomWidth) : 0) - got) <= 1) {
-          d = find(own, max);
-          note = d ? `${d.prop}: ${d.value}` : `${max[0]}: ${maxV}`;
-        } else if (minV !== "auto" && num(minV) > 0 && got > want) {
-          d = find(own, min);
-          note = d ? `${d.prop}: ${d.value}` : `${min[0]}: ${minV}`;
-        } else if ((d = find(own, size)) && d.important) note = `${d.prop}: ${d.value} !important`;
-        else if (cs.display === "inline") {
-          d = find(own, ["display"]);
-          note = "display: inline";
-        } else if (flex && row === x) {
-          const grow = num(cs.flexGrow), shrink = num(cs.flexShrink);
-          d = find(own, got < want ? ["flex-shrink", "flex"] : ["flex-grow", "flex"]);
-          note = d ? `${d.prop}: ${d.value}` : got < want && shrink ? `flex-shrink: ${shrink}` : got > want && grow ? `flex-grow: ${grow}` : "the flex container";
-          if (!d) d = find(above, ["display"]);
-        } else if (grid) {
-          d = find(above, x ? ["grid-template-columns", "grid-auto-columns"] : ["grid-template-rows", "grid-auto-rows"]);
-          note = d ? `${d.prop}: ${d.value}` : "the grid track";
-        } else if (/absolute|fixed/.test(cs.position) && (x ? cs.left !== "auto" && cs.right !== "auto" : cs.top !== "auto" && cs.bottom !== "auto")) {
-          d = find(own, x ? ["left", "right", "inset", "inset-inline"] : ["top", "bottom", "inset", "inset-block"]);
-          note = d ? `${d.prop}: ${d.value}` : "both insets";
-        } else {
-          d = null;
-          note = "";
-        }
-        if (note) {
-          this.setBlocked(d, `held by ${note}`);
-          return;
-        }
-      }
-    }
-    setBlocked(d, text, area = null) {
-      const was = this.blocked;
-      this.blocked = d;
-      this.wblock.textContent = text;
-      this.heldArea = text ? area : null;
-      if (was) this.syncRow(was);
-      if (d) {
-        this.syncRow(d);
-        if (this.hasAttribute("open") && this.views.css.hidden) {
-          this.fold(false);
-          this.show("css");
-        }
-        const row = this.rowOf.get(d)?.row;
-        if (row && !this.views.css.hidden) row.scrollIntoView({ block: "center" });
-      }
+      this.resize.setSizing(on);
     }
     chooseSize(el) {
-      this.setBlocked(null, "");
-      this.sizeTarget = el;
-      this.handle.setAttribute("data-on", "");
-      this.paint();
-    }
-    sizeHandle(handle) {
-      handle.addEventListener("pointerdown", (e) => {
-        const el = this.sizeTarget;
-        if (e.button !== 0 || !el || !this.resizeSupported(el)) return;
-        e.preventDefault();
-        e.stopPropagation();
-        if (this.editor && !this.editor.finish(false)) this.editor.finish(true);
-        const from = { x: e.clientX, w: el.getBoundingClientRect().width };
-        const session = this.resizeStart(el);
-        let want = from.w;
-        this.gesture(e, (event) => {
-          want = Math.max(1, from.w + event.clientX - from.x);
-          this.resizeWidth(session, want);
-          if (!this.sizeDrag) return;
-          const held = this.sizeCap.x || Math.abs(el.getBoundingClientRect().width - want) > 1, now = performance.now();
-          if (held && (!this.wblock.textContent || now - (this.explainedAt || 0) > 200)) {
-            this.explainedAt = now;
-            this.explainSize(el, want);
-          } else if (!held && this.wblock.textContent) this.setBlocked(null, "");
-        }, (_, cancelled) => {
-          this.finishResize(session, cancelled);
-          this.suppressClick();
-          if (!cancelled && el.isConnected) this.explainSize(el, want);
-        });
-      });
-      handle.addEventListener("keydown", (e) => {
-        const el = this.sizeTarget;
-        if (!["ArrowLeft", "ArrowRight"].includes(e.key) || !el || !this.resizeSupported(el)) return;
-        e.preventDefault();
-        e.stopPropagation();
-        const session = this.resizeStart(el);
-        const want = Math.max(1, el.getBoundingClientRect().width + (e.key === "ArrowRight" ? 1 : -1) * (e.shiftKey ? 10 : 1));
-        this.resizeWidth(session, want);
-        this.finishResize(session, false);
-        this.explainSize(el, want);
-      });
+      this.resize.choose(el);
     }
     resizeStart(el) {
-      if (!this.sized.has(el)) this.sized.set(el, el.getAttribute("style"));
-      const cs = getComputedStyle(el);
-      const kids = [...this.sized.keys()].filter((kid) => kid !== el && el.contains(kid) && kid.isConnected);
-      const before = new Map([el, ...kids].map((node) => [node, node.getAttribute("style")]));
-      const extra = cs.boxSizing === "content-box" ? num(cs.paddingLeft) + num(cs.paddingRight) + num(cs.borderLeftWidth) + num(cs.borderRightWidth) : 0;
-      this.sizeCap = { x: null, y: null };
-      this.sizeDrag = el;
-      this.setAttribute("resizing", "");
-      return { el, kids, before, extra, limit: this.sizeLimits(el, cs) };
+      return this.resize.start(el);
     }
     resizeWidth(session, desired) {
-      const { el, kids, before, extra, limit } = session;
-      if (!el.isConnected || helper(el)) {
-        this.cancelResize();
-        return;
-      }
-      if (!this.resizeSupported(el)) {
-        this.cancelResize();
-        this.setBlocked(null, "transformed: edit the CSS value instead");
-        return;
-      }
-      let w = Math.max(1, desired);
-      this.sizeCap = { x: null, y: null };
-      if (w > limit.w) {
-        w = limit.w;
-        this.sizeCap.x = limit.whyW;
-      }
-      if (this.writeSize(el, Math.round(w - extra))) this.sizeCap.x ||= "parent";
-      const over = limit.parent ? this.overflow(el, limit.parent) : null;
-      if (over?.x > 0.5) {
-        this.writeSize(el, Math.max(1, Math.round(w - over.x - extra)));
-        this.sizeCap.x ||= "parent";
-      }
-      for (let pass = 0; ; pass++) {
-        for (const kid of kids) this.restoreSize(kid, before.get(kid));
-        this.crush(el, kids);
-        const need = this.contentNeed(el);
-        if (need.x <= 1 || pass === 4) break;
-        this.writeSize(el, Math.round(el.getBoundingClientRect().width + need.x - extra), false);
-        this.sizeCap.x = "content";
-      }
-      this.paint();
+      this.resize.width(session, desired);
     }
     finishResize(session, cancelled) {
-      if (cancelled) for (const [node, attr] of session.before) this.restoreSize(node, attr, this.wrote.get(node)?.prop);
-      else {
-        const steps = [...session.before].filter(([node, attr]) => node.isConnected && node.getAttribute("style") !== attr).map(([node, attr]) => ({ el: node, before: attr, after: this.wrote.get(node)?.attr ?? node.getAttribute("style"), prop: this.wrote.get(node)?.prop }));
-        if (steps.length) this.sizeRecord(steps);
-      }
-      this.sizeDrag = null;
-      this.removeAttribute("resizing");
-      this.htmlDirty = true;
-      this.queueLoad();
-      this.paint();
+      this.resize.finish(session, cancelled);
     }
-    sizeReset(el, record = true) {
-      this.cancelResize();
-      if (!el || !this.sized.has(el)) return;
-      this.setBlocked(null, "");
-      const before = el.getAttribute("style"), prop = this.wrote.get(el)?.prop;
-      if (this.pageSized(el)) {
-        this.sized.delete(el);
-        this.wrote.delete(el);
-        this.setBlocked(null, "resize skipped: the page changed it");
-      } else {
-        this.restoreSize(el, this.sized.get(el), prop);
-        this.sized.delete(el);
-        if (record && el.getAttribute("style") !== before) this.sizeRecord([{ el, before, after: el.getAttribute("style"), prop }]);
-      }
-      this.htmlDirty = true;
-      this.queueLoad();
-      this.paint();
-    }
-    restoreStyle(el, attr) {
-      if (attr == null) el.removeAttribute("style");
-      else el.setAttribute("style", attr);
-    }
-    sizeRecord(steps) {
-      this.sizeHistory.push(steps);
+    sizeReset(el, record) {
+      this.resize.reset(el, record);
     }
     sizeUndo() {
-      this.cancelResize();
-      const entry = this.sizeHistory.pop();
-      if (!entry) return;
-      this.setBlocked(null, "");
-      let skipped = 0;
-      for (const step of [...entry].reverse()) {
-        if (!step.el.isConnected || helper(step.el)) {
-          skipped++;
-          continue;
-        }
-        const now = this.sizeOf(step.el, step.el.getAttribute("style"), step.prop), expected = this.sizeOf(step.el, step.after, step.prop);
-        if (now.value !== expected.value || now.priority !== expected.priority) {
-          skipped++;
-          continue;
-        }
-        if (!this.sized.has(step.el)) this.sized.set(step.el, step.after);
-        this.restoreSize(step.el, step.before, step.prop);
-        if (step.el.getAttribute("style") === this.sized.get(step.el)) this.sized.delete(step.el);
-      }
-      if (skipped) this.setBlocked(null, `${skipped} resize${skipped === 1 ? "" : "s"} skipped: the page changed it`);
-      this.htmlDirty = true;
-      this.queueLoad();
-      this.paint();
+      this.resize.undo();
     }
     sizeResetAll() {
-      this.cancelResize();
-      let skipped = 0;
-      for (const [el, attr] of this.sized) {
-        if (this.pageSized(el)) skipped++;
-        else this.restoreSize(el, attr, this.wrote.get(el)?.prop);
-      }
-      this.sized.clear();
-      this.sizeHistory.clear();
-      if (skipped) this.setBlocked(null, `${skipped} resize${skipped === 1 ? "" : "s"} skipped: the page changed it`);
-      this.htmlDirty = true;
-      this.queueLoad();
-      this.paint();
+      this.resize.resetAll();
     }
-    paintHold(el, chrome) {
-      const { r } = this.painter.geometry(el);
-      this.painter.box("dbox", r.left, r.top, r.width, r.height);
-      this.painter.chip(this.painter.label("hold", this.wblock.textContent, 0, 0), r, chrome);
-    }
-    paintSizer(el) {
-      const { r } = this.painter.geometry(el);
-      this.painter.box("box", r.left, r.top, r.width, r.height);
-      this.wval.textContent = `${name(el)} ${fmt(r.width)} × ${fmt(r.height)}px`;
-      const supported = this.resizeSupported(el);
-      this.handle.disabled = !supported;
-      this.handle.setAttribute("aria-label", `Adjust the width of ${name(el)}: ${fmt(r.width)}px`);
-      if (!supported && !this.wblock.textContent) this.setBlocked(null, "transformed: edit the CSS value instead");
-      const half = this.handle.offsetWidth / 2 || 16;
-      const hx = Math.min(Math.max(r.right, half), innerWidth - half), hy = Math.min(Math.max(r.bottom, half), innerHeight - half);
-      this.handle.style.left = `${hx}px`;
-      this.handle.style.top = `${hy}px`;
-      const reset = this.hresetBtn, w = reset.offsetWidth || 50, h = reset.offsetHeight || 20, gap = half + 6;
-      reset.toggleAttribute("data-on", this.sized.has(el));
-      reset.style.left = `${Math.max(4, hx + gap + w > innerWidth - 4 ? hx - gap - w : hx + gap)}px`;
-      reset.style.top = `${Math.max(4, Math.min(hy - h / 2, innerHeight - h - 4))}px`;
+    setBlocked(d, text, area) {
+      this.resize.setBlocked(d, text, area);
     }
     pickTarget(event) {
       const path = event.composedPath();
@@ -2584,51 +3280,6 @@ ${body}`);
         this.pickSurface.style.pointerEvents = "";
       }
     }
-    setPicking(on) {
-      if (on === this.picking) return;
-      this.picking = on;
-      this.pickBtn.setAttribute("aria-pressed", String(on));
-      this.toggleAttribute("picking", on);
-      if (on) this.tools.arm("picking");
-      else {
-        this.alt = false;
-        this.clearPicks();
-        this.tools.end("picking");
-      }
-    }
-    select(el) {
-      let row = this.rows.get(el);
-      if (!row) {
-        this.loadHtml();
-        row = this.rows.get(el);
-      }
-      if (!row) return;
-      const was = this.picks.has(el);
-      this.pick(el, row);
-      if (was) return;
-      this.fold(false);
-      this.reveal(el);
-      this.show("css");
-      this.scrollToHit();
-    }
-    pick(el, row) {
-      const on = !this.picks.has(el);
-      if (on) {
-        const used = new Set([...this.picks.values()].map((p) => p.hue));
-        let hue = 0;
-        while (used.has(hue)) hue++;
-        this.picks.set(el, { row, hue });
-        row.style.setProperty("--accent", `var(--pick-${hue % PALETTE})`);
-      } else {
-        this.picks.delete(el);
-        row.style.removeProperty("--accent");
-      }
-      this.setPickedRow(row, on);
-      if (on) this.focusEl = el;
-      else if (this.focusEl === el) this.focusEl = [...this.picks.keys()].pop() || null;
-      this.markHits();
-      this.paint();
-    }
     /* ---------- the overlay ---------- */
     marks() {
       const list = [...this.picks].map(([el, p]) => ({ el, model: true, hue: p.hue }));
@@ -2636,8 +3287,8 @@ ${body}`);
         if (this.alt && this.focusEl) list.push({ el: this.probe, dist: true });
         else list.push({ el: this.probe, probe: true });
       }
-      if (this.sizing && this.sizeTarget) list.push({ el: this.sizeTarget, size: true });
-      if (this.sizing && this.heldArea?.isConnected && this.wblock.textContent) list.push({ el: this.heldArea, hold: true });
+      if (this.resize.sizing && this.resize.target) list.push({ el: this.resize.target, size: true });
+      if (this.resize.sizing && this.resize.heldArea?.isConnected && this.wblock.textContent) list.push({ el: this.resize.heldArea, hold: true });
       if (this.measuring) {
         const right = document.documentElement.clientWidth || innerWidth, bottom = document.documentElement.clientHeight || innerHeight;
         let count = 0;
@@ -2678,7 +3329,7 @@ ${body}`);
       if (!this.connected || this.paintFrame != null) return;
       this.paintFrame = requestAnimationFrame(() => {
         this.paintFrame = null;
-        if (this.htmlDirty && this.loaded && this.hasAttribute("open") && !this.views.html.hidden && !this.editor && !this.sizeDrag) this.loadHtml();
+        if (this.htmlDirty && this.loaded && this.hasAttribute("open") && !this.views.html.hidden && !this.editor && !this.resize.drag) this.loadHtml();
         this.draw();
       });
     }
@@ -2700,60 +3351,16 @@ ${body}`);
       const chrome = (this.hasAttribute("open") ? this.panel : this.fab).getBoundingClientRect();
       for (const m of marks) {
         this.painter.group(m.probe ? "pick probe" : m.decl ? "pick decl" : m.measure ? "pick ruler" : "pick", m.model ? `var(--pick-${m.hue % PALETTE})` : m.decl ? "var(--css)" : null);
-        if (m.model) this.paintModel(m.el, m.hue, chrome);
-        else if (m.probe) this.paintProbe(m.el, chrome);
-        else if (m.dist) this.paintDistance(this.focusEl, m.el, chrome);
-        else if (m.measure) this.paintMeasure(m.el, chrome);
-        else if (m.size) this.paintSizer(m.el);
-        else if (m.hold) this.paintHold(m.el, chrome);
-        else this.paintDecl(m.el, m.decl, chrome);
+        if (m.model) paintModel(this.painter, m.el, m.hue, chrome, this.focusEl);
+        else if (m.probe) paintProbe(this.painter, m.el, chrome);
+        else if (m.dist) paintDistance(this.painter, this.focusEl, m.el, chrome);
+        else if (m.measure) paintMeasure(this.painter, m.el, chrome);
+        else if (m.size) this.resize.paintSizer(m.el);
+        else if (m.hold) this.resize.paintHold(m.el, chrome);
+        else paintDecl(this.painter, m.el, m.decl, chrome);
       }
       this.painter.end();
       this.reachCache = null;
-    }
-    paintModel(el, hue, chrome) {
-      const r = this.painter.geometry(el).r;
-      if (el === this.focusEl) {
-        this.painter.box("gd v", r.left, 0, 0, innerHeight);
-        this.painter.box("gd v", r.right, 0, 0, innerHeight);
-        this.painter.box("gd h", 0, r.top, innerWidth, 0);
-        this.painter.box("gd h", 0, r.bottom, innerWidth, 0);
-      }
-      this.painter.box("box", r.left, r.top, r.width, r.height);
-      this.painter.chip(this.painter.label("hue", this.painter.chipParts(el, r, false), 0, 0), r, chrome);
-      this.painter.dims(r, chrome);
-    }
-    paintProbe(el, chrome) {
-      const r = this.painter.geometry(el).r;
-      this.painter.box("box", r.left, r.top, r.width, r.height);
-      this.painter.chip(this.painter.label("", this.painter.chipParts(el, r, false), 0, 0), r, chrome);
-      this.painter.dims(r, chrome);
-    }
-    paintMeasure(el, chrome) {
-      const { r, p, m, b } = this.painter.geometry(el);
-      const all = { t: 1, r: 1, b: 1, l: 1 };
-      const pos = { t: Math.max(m.t, 0), r: Math.max(m.r, 0), b: Math.max(m.b, 0), l: Math.max(m.l, 0) };
-      if (pos.t || pos.r || pos.b || pos.l) this.painter.ring("mr", this.painter.outer(r, pos), pos, all, "mv");
-      if (b.t || b.r || b.b || b.l) this.painter.ring("bd", r, b, all, "bv");
-      const inner = { left: r.left + b.l, top: r.top + b.t, right: r.right - b.r, bottom: r.bottom - b.b, width: r.width - b.l - b.r, height: r.height - b.t - b.b };
-      if (p.t || p.r || p.b || p.l) this.painter.ring("pd", inner, p, all, "pv");
-      this.painter.box("box", r.left, r.top, r.width, r.height);
-      this.painter.chip(this.painter.label("", this.painter.chipParts(el, r, true), 0, 0), r, chrome);
-      this.paintFree(el, r, m);
-    }
-    paintFree(el, r, m) {
-      const parent = el.parentElement, cs = this.painter.geometry(el).cs;
-      if (!parent || helper(parent)) return;
-      const pcs = getComputedStyle(parent);
-      if (!/^(block|flow-root|list-item)$/.test(pcs.display) || !/^(block|flex|grid|table|list-item|flow-root)$/.test(cs.display) || cs.float !== "none" || /absolute|fixed/.test(cs.position)) return;
-      const { r: pr, p: pp, b: pb } = this.painter.geometry(parent);
-      const inner = { left: pr.left + pb.l + pp.l, right: pr.right - pb.r - pp.r };
-      const top = r.top - Math.max(m.t, 0), height = r.height + Math.max(m.t, 0) + Math.max(m.b, 0);
-      for (const [l, w] of [[inner.left, r.left - Math.max(m.l, 0) - inner.left], [r.right + Math.max(m.r, 0), inner.right - r.right - Math.max(m.r, 0)]]) {
-        if (w < 24 || height < 8) continue;
-        this.painter.box("free", l, top, w, height);
-        if (w >= 72) this.painter.label("fv", `unused ${fmt(w)}px`, l + w / 2, top + height / 2);
-      }
     }
     setMeasuring(on) {
       if (on === this.measuring) return;
@@ -2771,393 +3378,33 @@ ${body}`);
       this.toggleAttribute("measuring", on);
       this.paint();
     }
-    paintDistance(from, to, chrome) {
-      const a = from.getBoundingClientRect(), b = to.getBoundingClientRect();
-      this.painter.box("dbox", b.left, b.top, b.width, b.height);
-      let line = null, gap = 0, chipX, chipY;
-      const mid = (lo1, hi1, lo2, hi2) => {
-        const lo = Math.max(lo1, lo2), hi = Math.min(hi1, hi2);
-        return lo < hi ? (lo + hi) / 2 : (lo1 + hi1) / 2;
-      };
-      if (b.left >= a.right) {
-        gap = b.left - a.right;
-        const y = mid(a.top, a.bottom, b.top, b.bottom);
-        line = this.painter.box("dln", a.right, y, gap, 1);
-        chipX = a.right + gap / 2;
-        chipY = y;
-      } else if (b.right <= a.left) {
-        gap = a.left - b.right;
-        const y = mid(a.top, a.bottom, b.top, b.bottom);
-        line = this.painter.box("dln", b.right, y, gap, 1);
-        chipX = b.right + gap / 2;
-        chipY = y;
-      } else if (b.top >= a.bottom) {
-        gap = b.top - a.bottom;
-        const x = mid(a.left, a.right, b.left, b.right);
-        line = this.painter.box("dln", x, a.bottom, 1, gap);
-        chipX = x;
-        chipY = a.bottom + gap / 2;
-      } else if (b.bottom <= a.top) {
-        gap = a.top - b.bottom;
-        const x = mid(a.left, a.right, b.left, b.right);
-        line = this.painter.box("dln", x, b.bottom, 1, gap);
-        chipX = x;
-        chipY = b.bottom + gap / 2;
-      }
-      if (line) this.painter.label("dch", fmt(gap), chipX, chipY);
-      this.painter.chip(this.painter.label("", this.painter.chipParts(to, b), 0, 0), b, chrome);
+    /* ---------- the CSS tab lives in panel/css-view.js; this is the surface the panel and the drivers reach it by ---------- */
+    get rowOf() {
+      return this.cssView.rowOf;
     }
-    paintDecl(el, d, chrome) {
-      const { r, cs, p, m, b } = this.painter.geometry(el);
-      const band = sides(d.prop, cs);
-      if (band && band.kind === "padding") {
-        this.painter.ring("pd", { left: r.left + b.l, top: r.top + b.t, right: r.right - b.r, bottom: r.bottom - b.b, width: r.width - b.l - b.r, height: r.height - b.t - b.b }, p, band.sides, "pv");
-      } else if (band) {
-        const pos = { t: Math.max(m.t, 0), r: Math.max(m.r, 0), b: Math.max(m.b, 0), l: Math.max(m.l, 0) };
-        this.painter.ring("mr", this.painter.outer(r, pos), pos, band.sides, "mv");
-      }
-      this.painter.box("box", r.left, r.top, r.width, r.height);
-      if (!band && SIZE.test(d.prop)) this.sizeLine(el, d, r, cs, p, b, chrome);
+    get pins() {
+      return this.cssView.pins;
     }
-    sizeLine(el, d, r, cs, p, b, chrome) {
-      const vertical = /^(vertical|sideways)/.test(cs.writingMode);
-      const horizontal = /width/.test(d.prop) || /inline-size/.test(d.prop) && !vertical || /block-size/.test(d.prop) && vertical;
-      const resolved = num(cs[camel(d.prop)]);
-      const content = cs.boxSizing === "content-box";
-      const pad = content ? horizontal ? b.l + p.l : b.t + p.t : 0;
-      const len = Number.isFinite(parseFloat(cs[camel(d.prop)])) ? resolved : (horizontal ? r.width : r.height) - (content ? horizontal ? b.l + b.r + p.l + p.r : b.t + b.b + p.t + p.b : 0);
-      const text = `${d.prop}: ${d.value}`;
-      if (horizontal) {
-        const above = r.top >= 32;
-        const y = above ? r.top - 10 : r.top + 10;
-        this.painter.box("ln dim-width", r.left + pad, y, len, 1);
-        const l = this.painter.label("sz", text, 0, y + (above ? -12 : 12));
-        this.painter.place(l, "left", r.left + pad, r.left + pad + len, chrome);
-      } else {
-        const beside = this.painter.beside(r, chrome);
-        const x = beside ? r.right + 10 : r.right - 10;
-        this.painter.box("ln dim-height", x, r.top + pad, 1, len);
-        const l = this.painter.label("sz", text, x + (beside ? 8 : -8), 0);
-        l.style.transform = beside ? "translate(0, -50%)" : "translate(-100%, -50%)";
-        this.painter.place(l, "top", r.top + pad, r.top + pad + len, chrome);
-      }
+    get hover() {
+      return this.cssView.hover;
     }
-    /* ---------- CSS tab ---------- */
+    get editor() {
+      return this.cssView.editor;
+    }
     renderCss() {
-      const view = this.views.css;
-      view.replaceChildren();
-      this.hover = null;
-      this.rowOf = /* @__PURE__ */ new Map();
-      this.groups = [];
-      if (!this.store.sheets.length && !this.store.inlineNodes?.length) {
-        view.append(this.note("No stylesheet on this page."));
-        return;
-      }
-      for (const s of this.store.sheets) {
-        if (this.store.sheets.length > 1) view.append(this.comment(`/* ${s.name} */`));
-        if (s.unread) {
-          view.append(this.comment("/* stylesheet could not be read */"));
-          continue;
-        }
-        this.render(view, s.nodes, 0);
-      }
-      for (const n of this.store.inlineNodes || []) {
-        const el = n.model.inlineEl;
-        const matches = this.groups.filter((x) => x.node !== n && x.node.model && !x.node.model.inlineEl && this.store.matchModel(x.node.model, [el]).length > 0);
-        const first = matches.find((x) => !/^\*/.test(x.node.model.selector || "")) || matches[0];
-        const g = this.group(n, { depth: 0 });
-        g.classList.add("inline");
-        if (first) first.el.before(g);
-        else view.prepend(g);
-      }
-      this.markHits();
+      this.cssView.render();
     }
     markHits() {
-      const el = this.focusEl, hue = el ? this.picks.get(el)?.hue : null;
-      for (const { node, el: g } of this.groups || []) {
-        let hit = false;
-        if (el && node.model) hit = this.store.matchModel(node.model, [el]).length > 0;
-        g.classList.toggle("hit", hit);
-        if (hit) g.style.setProperty("--accent", `var(--pick-${hue % PALETTE})`);
-        else g.style.removeProperty("--accent");
-      }
+      this.cssView.markHits();
     }
     scrollToHit() {
-      const hits = (this.groups || []).filter((x) => x.el.classList.contains("hit"));
-      const first = (hits.find((x) => !/^\*/.test(x.node.model.selector || "")) || hits[0])?.el;
-      if (!first) return;
-      const body = this.body.getBoundingClientRect();
-      this.body.scrollTop += first.getBoundingClientRect().top - body.top - 8;
-    }
-    note(text) {
-      const n = document.createElement("div");
-      n.className = "empty";
-      n.textContent = text;
-      return n;
-    }
-    group(n, opts = {}) {
-      const g = document.createElement("div");
-      g.className = "grp";
-      g.dataset.depth = opts.depth || 0;
-      const head = document.createElement("div");
-      head.className = "gh";
-      head.append(span("sel", n.head));
-      if (n.model?.nativeFallback) head.title = "Live CSSOM values; source text differs or contains nested declarations.";
-      g.append(head);
-      for (const d of n.decls) {
-        if (d.type === "blank") continue;
-        if (d.type === "comment") {
-          g.append(this.comment(d.text));
-          continue;
-        }
-        g.append(this.declNode(d));
-      }
-      this.groups.push({ node: n, el: g });
-      if (n.children?.length) this.render(g, n.children, (opts.depth || 0) + 1);
-      return g;
-    }
-    comment(text) {
-      const c = document.createElement("div");
-      c.className = "cm";
-      c.textContent = text;
-      return c;
-    }
-    render(out, nodes, depth) {
-      for (const n of nodes) {
-        switch (n.type) {
-          case "blank":
-            break;
-          case "comment":
-            out.append(this.comment(n.text));
-            break;
-          case "flat":
-            out.append(this.comment(n.text));
-            break;
-          case "opaque":
-            out.append(this.comment(`${n.head} { … }`));
-            break;
-          case "group": {
-            const head = document.createElement("div");
-            head.className = "gh";
-            head.append(span("sel", n.head));
-            out.append(head);
-            this.render(out, n.children, depth + 1);
-            break;
-          }
-          case "rule":
-            out.append(this.group(n, { depth }));
-            break;
-        }
-      }
-    }
-    declNode(d) {
-      const row = document.createElement("div");
-      row.className = "d";
-      const text = `${d.prop}: ${d.value}${d.important ? " !important" : ""}`;
-      if (!d.live) {
-        row.classList.add("na");
-        row.title = "This declaration is unsupported or read-only";
-        row.append(span("t", text));
-        return row;
-      }
-      const box = document.createElement("input");
-      box.type = "checkbox";
-      box.checked = d.on;
-      box.setAttribute("aria-label", `${d.prop}: ${d.value}`);
-      box.addEventListener("change", () => {
-        const before = this.state(d);
-        d.on = box.checked;
-        this.apply(d);
-        this.syncRow(d);
-        this.record([{ d, before, after: this.state(d) }]);
-      });
-      const show = document.createElement("button");
-      show.type = "button";
-      show.className = "t";
-      show.textContent = `${d.prop}: `;
-      show.setAttribute("aria-pressed", String(this.pins.has(d)));
-      show.title = `Show where ${d.model.selector || d.model.head} lands`;
-      show.addEventListener("click", () => {
-        const on = !this.pins.has(d);
-        if (on) this.pins.add(d);
-        else this.pins.delete(d);
-        show.setAttribute("aria-pressed", String(on));
-        row.classList.toggle("on", on);
-        this.paint();
-      });
-      const sw = document.createElement("span");
-      sw.className = "sw";
-      const value = span("v", d.value);
-      value.tabIndex = 0;
-      value.setAttribute("role", "button");
-      value.title = "Click to change the value";
-      value.addEventListener("click", () => this.edit(d));
-      value.addEventListener("keydown", (e) => {
-        if (e.key === "Enter" || e.key === " ") {
-          e.preventDefault();
-          this.edit(d);
-        }
-      });
-      row.addEventListener("pointerenter", () => {
-        this.hover = d;
-        this.paint();
-      });
-      row.addEventListener("pointerleave", () => {
-        this.hover = null;
-        this.paint();
-      });
-      row.append(box, show, sw, value, span("x", d.important ? "!important" : ""));
-      row.classList.toggle("on", this.pins.has(d));
-      this.rowOf.set(d, { row, box, value, sw });
-      this.syncRow(d);
-      return row;
+      this.cssView.scrollToHit();
     }
     syncRow(d) {
-      const r = this.rowOf.get(d);
-      if (!r) return;
-      r.box.checked = d.on;
-      r.box.setAttribute("aria-label", `${d.prop}: ${d.value}`);
-      r.value.textContent = d.value;
-      r.row.classList.toggle("off", !d.on);
-      r.row.classList.toggle("edited", d.value !== d.orig);
-      r.row.classList.toggle("auto", !!d.auto);
-      r.row.classList.toggle("block", d === this.blocked);
-      const color = isColor(d.prop, d.value);
-      r.sw.hidden = !color;
-      if (color) r.sw.style.background = d.value;
-    }
-    edit(d) {
-      if (this.editor && !this.editor.finish(false)) this.editor.finish(true);
-      const r = this.rowOf.get(d);
-      if (!r) return;
-      const { value } = r;
-      const start = d.value, startOn = d.on;
-      const model = d.model, startText = model.rule.style.cssText;
-      const startAttribute = model.inlineEl?.getAttribute("style") ?? null;
-      const cancelStyle = this.store.scratch(model, startText);
-      let editorWrite = startText;
-      const absorbOutside = () => {
-        const live = model.rule.style.cssText;
-        for (const { prop, value: value2, priority } of this.store.styleChanges(this.store.scratch(model, editorWrite), this.store.scratch(model, live))) {
-          this.store.writeProperty(cancelStyle, prop, value2, priority);
-        }
-        editorWrite = live;
-      };
-      const field = document.createElement("input");
-      field.type = "text";
-      field.className = "ed";
-      field.value = d.value;
-      field.setAttribute("aria-label", `${d.prop} value`);
-      field.autocomplete = "off";
-      field.spellcheck = false;
-      const size = () => {
-        field.style.inlineSize = `calc(${Math.max(field.value.length, 1) + 1}ch + 12px)`;
-      };
-      const validate = () => {
-        absorbOutside();
-        const valid = this.change(d, field.value);
-        if (valid) editorWrite = model.rule.style.cssText;
-        field.setAttribute("aria-invalid", String(!valid));
-        field.setCustomValidity(valid ? "" : "Enter a valid CSS value.");
-        this.status.textContent = valid ? "" : "Invalid CSS value. Correct it, or press Escape to cancel.";
-        return valid;
-      };
-      const set = (v) => {
-        field.value = v;
-        size();
-        return validate();
-      };
-      field.addEventListener("input", () => {
-        size();
-        validate();
-      });
-      field.addEventListener("keydown", (e) => {
-        if (e.key === "Enter") {
-          e.preventDefault();
-          finish(false, true);
-        } else if (e.key === "Escape") {
-          e.preventDefault();
-          e.stopPropagation();
-          finish(true, true);
-        } else if (e.key === "ArrowUp" || e.key === "ArrowDown") {
-          const m = field.value.match(/-?\d*\.?\d+/);
-          if (!m) return;
-          e.preventDefault();
-          const step = (e.key === "ArrowUp" ? 1 : -1) * (e.shiftKey ? 10 : e.altKey ? 0.1 : 1);
-          const n = Math.round((parseFloat(m[0]) + step) * 1e3) / 1e3;
-          set(field.value.slice(0, m.index) + n + field.value.slice(m.index + m[0].length));
-        }
-      });
-      let finished = false;
-      const keys = new AbortController();
-      const finish = (cancel, restoreFocus = false) => {
-        if (finished) return true;
-        if (!cancel && !validate()) {
-          if (restoreFocus) field.focus();
-          return false;
-        }
-        finished = true;
-        keys.abort();
-        if (!cancel && (d.value !== start || d.on !== startOn)) this.record([{ d, before: { value: start, on: startOn, important: d.important }, after: this.state(d) }]);
-        if (cancel) {
-          absorbOutside();
-          this.store.rebaseBaseline(model);
-          if (model.inlineEl && cancelStyle.cssText === startText) {
-            if (startAttribute == null) model.inlineEl.removeAttribute("style");
-            else model.inlineEl.setAttribute("style", startAttribute);
-          } else model.rule.style.cssText = cancelStyle.cssText;
-          d.value = start;
-          d.on = startOn;
-          const originally = this.store.scratch(model, startText);
-          if (startOn && (originally.getPropertyValue(d.prop) !== cancelStyle.getPropertyValue(d.prop) || originally.getPropertyPriority(d.prop) !== cancelStyle.getPropertyPriority(d.prop))) {
-            d.value = cancelStyle.getPropertyValue(d.prop) || start;
-            d.on = cancelStyle.getPropertyValue(d.prop) !== "";
-            d.important = cancelStyle.getPropertyPriority(d.prop) === "important";
-          }
-          model.sourceText = this.store.scratch(model, this.store.declarationText(model)).cssText;
-          model.lastApplied = model.rule.style.cssText;
-          this.queueLoad();
-          this.markHits();
-          this.paint();
-        }
-        this.status.textContent = "";
-        field.replaceWith(value);
-        this.syncRow(d);
-        if (this.editor?.field === field) this.editor = null;
-        if (restoreFocus) value.focus();
-        if (this.pendingCssRender) {
-          this.pendingCssRender = false;
-          this.renderCss();
-          if (restoreFocus) this.rowOf.get(d)?.value.focus();
-        }
-        return true;
-      };
-      addEventListener("keydown", (e) => {
-        if (e.key !== "Escape") return;
-        e.preventDefault();
-        e.stopImmediatePropagation();
-        finish(true, true);
-      }, { capture: true, signal: keys.signal });
-      this.editor = { field, finish, declaration: d };
-      field.addEventListener("blur", () => finish(false));
-      size();
-      value.replaceWith(field);
-      field.focus();
-      field.select();
-    }
-    change(d, value) {
-      value = value.trim();
-      if (!value || !this.store.validValue(d, value)) return false;
-      d.value = value;
-      d.on = true;
-      this.apply(d);
-      return true;
+      this.cssView.syncRow(d);
     }
     apply(d) {
-      this.store.write(d);
-      for (const entry of d.model.decls) if (entry.type === "decl") this.syncRow(entry);
-      this.markHits();
-      this.paint();
+      this.cssView.apply(d);
     }
     /* ---------- undo: the CSS changes, stepped back one at a time ---------- */
     state(d) {
@@ -3185,32 +3432,16 @@ ${body}`);
     }
     resetAll() {
       this.editor?.finish(true);
-      this.setPicking(false);
-      this.setSizing(false);
+      this.picker.setPicking(false);
+      this.resize.setSizing(false);
       this.setMeasuring(false);
-      this.sizeResetAll();
+      this.resize.resetAll();
       this.reset();
       this.clearMarks();
     }
-    clearPicks() {
-      for (const [, p] of this.picks) {
-        this.setPickedRow(p.row, false);
-        p.row.style.removeProperty("--accent");
-      }
-      this.picks.clear();
-      this.focusEl = null;
-      this.markHits();
-      this.paint();
-    }
     clearMarks() {
-      this.clearPicks();
-      this.pins.clear();
-      this.hover = null;
-      this.markHits();
-      for (const r of this.rowOf.values()) {
-        r.row.classList.remove("on");
-        r.row.querySelector(".t")?.setAttribute("aria-pressed", "false");
-      }
+      this.picker.clear();
+      this.cssView.clearMarks();
       this.paint();
     }
     reset() {

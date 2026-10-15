@@ -19,13 +19,19 @@ The Playwright suites that drive the built file in a browser live outside this r
 
 `src/` map:
 
-- `main.js` — the `<fm-inspector>` element: the panel, the HTML and CSS views, the picker, the resize tool and the eye, wired to the modules below (the next cuts take the views and the tools out of it).
+- `main.js` — the `<fm-inspector>` element: the panel's chrome (open/fold/drag/resize, the tabs, the theme), the page watchers and the load cycle, the overlay's mark list and frame, the ruler, the CSS undo stack and the Resets; it wires the modules below through small `ui` hook objects and keeps a thin forwarder surface for them.
 - `style.css` — the panel's own styles, inlined into the shadow root.
 - `markup.js` — the shadow DOM markup and the inline icons.
 - `util.js` — pure helpers: numbers, names, the padding/margin side map, `span()`.
 - `foreign.js` — which nodes are not the page's own (the inspector, extensions, `data-fm-inspector-ignore`).
 - `css/parse.js` — the CSS source reader (comments and blank lines kept) and its pairing with the CSSOM; pure, unit-tested.
 - `css/model.js` — `CssStore`: every stylesheet read CSSOM-first, the declaration models, the inline styles, the poll's snapshot and the write path; it reaches the panel through a small `ui` hook set only.
-- `overlay/painter.js` — `Painter`: the overlay's boxes, bands, labels and chips, placed without covering a control or each other; it knows the overlay element alone.
+- `panel/html-view.js` — `HtmlView`: the HTML tab's rows, folds and reveal.
+- `panel/css-view.js` — `CssView`: the CSS tab's groups and rows, pins, hover, the value editor and the rows' write path.
 - `tools.js` — `Tools`: the page-wide tools' arbitration (which are open, which one takes the page's input) and the shield.
+- `tools/picker.js` — `Picker`: the picks, the probe, Alt's distance mode.
+- `tools/resize.js` — `Resizer`: the resize tool's state, drag, write/restore paths, undo and Resets, the handle's painting.
+- `tools/size-explain.js` — the resize tool's measurements and the reason a width did not land; `trackTokens` pure, unit-tested.
+- `overlay/painter.js` — `Painter`: the overlay's boxes, bands, labels and chips, placed without covering a control or each other; it knows the overlay element alone.
+- `overlay/draw.js` — the drawings over the Painter: a pick, the probe, the ruler, the Alt gap, a declaration's reach.
 - `history.js` — `History`: one undo stack; the CSS edits and the resizes hold separate instances.

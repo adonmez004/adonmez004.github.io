@@ -2,6 +2,28 @@
 
 The code inspector on the demo pages (`inspector.js`). Versions follow semver; the version also sits on the first line of the file; the copyright line closes it.
 
+## v0.1.79 (2026-10-15)
+
+- A parent that hugs its content never gets the `100%` (Alper's call, after the keyboard suite showed it): the QR card sits in a content-sized `main`, so shrinking it shrank `main` with it, and the first step back up reached "the parent's box" and was written as `100%`, which the card's `max-inline-size` resolved to 320 again, a 1px step jumping to the max. The tool writes the px value first and looks at the parent: a content box that moved with the element belongs to a hugging parent, and that parent gets no `100%` for the rest of the drag. A parent with a width of its own behaves as before.
+
+## v0.1.78 (2026-10-15)
+
+Four suites added outside the repo (visual signatures of six overlay states, phones with real touch input, the keyboard paths, a 3000-element page) and the one thing the big page found, fixed:
+
+- The overlay lays out ONCE per frame. The chips and line labels used to be placed one by one, each spot read back from the browser after every write, so a frame with the eye on (300 chips, up to 1500 labels) forced thousands of layouts: 80 seconds a frame on a 3000-element page, the page frozen. The Painter now collects the labels, reads every size and transform in one pass and computes the spots in numbers; the same frame takes about a second, and every label lands exactly where it did (the six visual signatures are identical, the 57 suites read the same).
+- Recorded, not changed: opening the panel on that page costs about 7 s (3 s of it the 6000 HTML rows), a pick about 1 s, the poll's snapshot 7 ms; the eye's 300-element cap holds (301 marks with a pick).
+
+## v0.1.77 (2026-10-15)
+
+Internal only; the built file behaves as v0.1.76 did (every suite reads the same). The element's file, `src/main.js`, went from 1659 lines to about 720: the four bodies the v0.1.75 cut left in it are modules of their own now, each behind a small `ui` hook set, and the element keeps a thin surface of forwarders (the methods and fields the panel's wiring and the test drivers reach: `chooseSize`, `resizeStart`, `pick`, `picks`, `rowOf`, `apply`, …) so nothing outside had to change:
+
+- `tools/size-explain.js` — the resize tool's measurements and the reason a width did not land (`sizeLimits`, `parentBase`, `contentNeed`, `overflow`, `explainSize` returning `{ d, text, area }` instead of acting; `trackTokens` pure and unit-tested). Nothing in it touches the inspector's state.
+- `tools/resize.js` — `Resizer`: the tool's state (the chosen element, the sized map, the last-write map, the drag, the cap, the held row, its own `History`), the handle's drag and keys, the write and restore paths, undo and the two Resets, the handle's and the held area's painting.
+- `tools/picker.js` — `Picker`: the picks, the focus element, the probe and Alt, select and clear, the crosshair.
+- `panel/html-view.js` — `HtmlView`: the DOM rows, folds, the open tag, reveal, the picked-row marks.
+- `panel/css-view.js` — `CssView`: the rule groups and declaration rows, pins and hover, the value editor, `apply` (the write path from the rows), the hits and the scroll to them.
+- `overlay/draw.js` — the overlay's drawings as free functions over the `Painter` (a pick, the probe, the ruler's bands and unused room, the Alt gap, a declaration's reach and size line); `marks()` and `draw()` stay in the element, they read every tool's state.
+
 ## v0.1.76 (2026-10-15)
 
 An outside review (Codex) of the v0.1.75 build; its findings checked against the source one by one, five taken, one kept as the standing trade-off:

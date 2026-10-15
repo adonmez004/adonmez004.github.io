@@ -1,5 +1,6 @@
 // The overlay's drawing primitives: boxes, bands, labels and chips placed in the viewport without covering a control or each other.
-// It knows the overlay element alone: callers begin() a frame, open group()s, draw into them and end() it.
+// It knows the overlay element alone: callers begin() a frame, open group()s, draw into them and end() it; the labels' spots are resolved at end(),
+// from one layout read for the whole frame.
 import { num, fmt, name, span } from "../util.js";
 
 export class Painter {
@@ -7,15 +8,16 @@ export class Painter {
     this.ov = ov;
     this.into = null; // the group the next box lands in
     this.placed = []; // the labels' rects this frame, for collision
+    this.pending = []; // the labels waiting for their spot: chips, fixed labels and line labels, resolved together at end()
     this.rectCache = null; this.geometryCache = null; // one measurement per element per frame
   }
 
   begin() {
     this.rectCache = new Map(); this.geometryCache = new Map();
-    this.ov.replaceChildren(); this.placed = [];
+    this.ov.replaceChildren(); this.placed = []; this.pending = [];
   }
 
-  end() { this.into = null; this.rectCache = null; this.geometryCache = null; }
+  end() { this.resolve(); this.into = null; this.rectCache = null; this.geometryCache = null; }
 
   group(cls, accent) {
     const group = document.createElement("div"); group.className = cls;
@@ -99,37 +101,20 @@ export class Painter {
   }
 
   chip(label, r, chrome) {
-    // The name chip: above the element, else below, else inside its top-left corner; never over the panel or another chip
-    const h = label.getBoundingClientRect().height;
-    const spots = [];
-    if (r.top - h - 8 >= 0) spots.push([r.left, r.top - h - 8]);
-    if (r.bottom + h + 8 <= innerHeight) spots.push([r.left, r.bottom + 8]);
-    spots.push([r.left + 8, r.top + 8], [r.right + 8, r.top], [r.left - label.getBoundingClientRect().width - 8, r.top]);
-    const hits = (a, b) => a.left < b.right && a.right > b.left && a.top < b.bottom && a.bottom > b.top;
-    for (const [x, y] of spots) {
-      label.style.left = `${Math.max(x, 0)}px`;
-      label.style.top = `${y}px`;
-      this.clamp(label); // the collision test reads the clamped spot: a chip pushed in from the edge must not land on a control
-      const b = label.getBoundingClientRect();
-      if (!hits(b, chrome) && !this.placed.some((p) => hits(b, p))) { this.placed.push(b); return; }
-    }
-    label.remove(); // no free spot: the frame and bands stand, the name chip must not cover a control or another chip
+    // The name chip: above the element, else below, else inside its top-left corner; never over the panel or another chip. Resolved at end()
+    this.pending.push({ kind: "chip", label, r, chrome });
   }
 
   fix(label) {
-    this.clamp(label);
-    this.placed.push(label.getBoundingClientRect());
+    // The label stays where it was drawn, clamped into the viewport, and the labels after it keep off it. Resolved at end()
+    this.pending.push({ kind: "fix", label });
     return label;
   }
 
-  clamp(label) {
-    // Keeps a label inside the viewport, whatever transform it wears
-    const b = label.getBoundingClientRect();
-    let dx = 0, dy = 0;
-    if (b.left < 4) dx = 4 - b.left; else if (b.right > innerWidth - 4) dx = innerWidth - 4 - b.right;
-    if (b.top < 4) dy = 4 - b.top; else if (b.bottom > innerHeight - 4) dy = innerHeight - 4 - b.bottom;
-    if (dx) label.style.left = `${num(label.style.left) + dx}px`;
-    if (dy) label.style.top = `${num(label.style.top) + dy}px`;
+  place(label, side, from, to, chrome) {
+    // Centers the label on its line, then slides it along the line until it clears the panel (or the pill)
+    // and every label already placed; the first free spot nearest the centre wins. Resolved at end()
+    this.pending.push({ kind: "place", label, side, from, to, chrome });
   }
 
   beside(r, chrome) {
@@ -138,33 +123,72 @@ export class Painter {
     return !(r.right + 10 < chrome.right && r.right + 90 > chrome.left && r.top < chrome.bottom && r.bottom > chrome.top);
   }
 
-  place(label, side, from, to, chrome) {
-    // Centers the label on its line, then slides it along the line until it clears the panel (or the pill)
-    // and every label already placed; the first free spot nearest the centre wins
-    const set = (mid) => { label.style[side] = `${mid}px`; };
-    const hits = (a, b) => a.left < b.right && a.right > b.left && a.top < b.bottom && a.bottom > b.top;
-    const free = () => { const b = label.getBoundingClientRect(); return !hits(b, chrome) && !this.placed.some((p) => hits(b, p)); };
-    const mid = (from + to) / 2;
-    set(mid);
-    if (!free()) {
-      const b = label.getBoundingClientRect();
-      const size = side === "left" ? b.width : b.height, step = size * 0.6 + 4;
-      const span = Math.max((to - from) / 2 - size / 2, 0);
-      let found = false;
-      for (let k = 1; k * step <= span && !found; k++) {
-        for (const dir of [1, -1]) { set(mid + dir * k * step); if (free()) { found = true; break; } }
-      }
-      if (!found) {
-        // No room along the line: step off it, row by row, until the label clears everything
-        set(mid);
-        const cross = side === "left" ? "top" : "left", thick = (side === "left" ? b.height : b.width) + 4;
-        const base = num(label.style[cross]);
-        for (let k = 1; k <= 4 && !found; k++) {
-          for (const dir of [-1, 1]) { label.style[cross] = `${base + dir * k * thick}px`; if (free()) { found = true; break; } }
-        }
-        if (!found) label.style[cross] = `${base}px`;
-      }
+  resolve() {
+    // The labels' spots, in drawing order, from ONE layout: every label's size and transform are read first (a single forced layout for the frame),
+    // then each spot is computed in numbers and written, never read back. Reading after every write made a 300-chip frame cost a minute on a big page
+    const sizes = new Map();
+    for (const { label } of this.pending) {
+      if (sizes.has(label)) continue;
+      const b = label.getBoundingClientRect(), t = getComputedStyle(label).transform.match(/matrix\(([^)]*)\)/);
+      const [, , , , tx, ty] = t ? t[1].split(",").map(Number) : [1, 0, 0, 1, 0, 0];
+      sizes.set(label, { w: b.width, h: b.height, tx, ty });
     }
-    this.fix(label);
+    const hits = (a, b) => a.left < b.right && a.right > b.left && a.top < b.bottom && a.bottom > b.top;
+    const rectOf = (label) => { const s = sizes.get(label), l = num(label.style.left) + s.tx, t = num(label.style.top) + s.ty; return { left: l, top: t, right: l + s.w, bottom: t + s.h, width: s.w, height: s.h }; };
+    const clamp = (label) => {
+      // Keeps a label inside the viewport, whatever transform it wears
+      const b = rectOf(label);
+      let dx = 0, dy = 0;
+      if (b.left < 4) dx = 4 - b.left; else if (b.right > innerWidth - 4) dx = innerWidth - 4 - b.right;
+      if (b.top < 4) dy = 4 - b.top; else if (b.bottom > innerHeight - 4) dy = innerHeight - 4 - b.bottom;
+      if (dx) label.style.left = `${num(label.style.left) + dx}px`;
+      if (dy) label.style.top = `${num(label.style.top) + dy}px`;
+    };
+    const free = (label, chrome) => { const b = rectOf(label); return !hits(b, chrome) && !this.placed.some((p) => hits(b, p)); };
+    for (const item of this.pending) {
+      const { label } = item;
+      if (!label.isConnected) continue;
+      if (item.kind === "fix") { clamp(label); this.placed.push(rectOf(label)); continue; }
+      if (item.kind === "chip") {
+        const { r, chrome } = item, { w, h } = sizes.get(label);
+        const spots = [];
+        if (r.top - h - 8 >= 0) spots.push([r.left, r.top - h - 8]);
+        if (r.bottom + h + 8 <= innerHeight) spots.push([r.left, r.bottom + 8]);
+        spots.push([r.left + 8, r.top + 8], [r.right + 8, r.top], [r.left - w - 8, r.top]);
+        let found = false;
+        for (const [x, y] of spots) {
+          label.style.left = `${Math.max(x, 0)}px`;
+          label.style.top = `${y}px`;
+          clamp(label); // the collision test reads the clamped spot: a chip pushed in from the edge must not land on a control
+          if (free(label, chrome)) { this.placed.push(rectOf(label)); found = true; break; }
+        }
+        if (!found) label.remove(); // no free spot: the frame and bands stand, the name chip must not cover a control or another chip
+        continue;
+      }
+      const { side, from, to, chrome } = item, { w, h } = sizes.get(label);
+      const set = (mid) => { label.style[side] = `${mid}px`; };
+      const mid = (from + to) / 2;
+      set(mid);
+      if (!free(label, chrome)) {
+        const size = side === "left" ? w : h, step = size * 0.6 + 4;
+        const span = Math.max((to - from) / 2 - size / 2, 0);
+        let found = false;
+        for (let k = 1; k * step <= span && !found; k++) {
+          for (const dir of [1, -1]) { set(mid + dir * k * step); if (free(label, chrome)) { found = true; break; } }
+        }
+        if (!found) {
+          // No room along the line: step off it, row by row, until the label clears everything
+          set(mid);
+          const cross = side === "left" ? "top" : "left", thick = (side === "left" ? h : w) + 4;
+          const base = num(label.style[cross]);
+          for (let k = 1; k <= 4 && !found; k++) {
+            for (const dir of [-1, 1]) { label.style[cross] = `${base + dir * k * thick}px`; if (free(label, chrome)) { found = true; break; } }
+          }
+          if (!found) label.style[cross] = `${base}px`;
+        }
+      }
+      clamp(label); this.placed.push(rectOf(label));
+    }
+    this.pending = [];
   }
 }
