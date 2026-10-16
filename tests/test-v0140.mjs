@@ -1,0 +1,34 @@
+// Phones with touch (v0.1.40 checked the old picker's picks): the quick view armed stays armed when its sheet is closed, a tap on the page while closed opens the sheet on that element, the icon ends it; desktop: closing the box keeps the tool, Escape ends it with the box closed
+import { chromium } from "playwright";
+import http from "node:http"; import fs from "node:fs"; import path from "node:path";
+const ROOT = new URL("./site/", import.meta.url).pathname, LOCAL = (process.env.INSPECTOR || new URL("../inspector.js", import.meta.url).pathname);
+const srv = http.createServer((q, r) => { const f = q.url === "/inspector.js" ? LOCAL : path.join(ROOT, q.url === "/" ? "index.html" : q.url); try { r.setHeader("content-type", f.endsWith(".css") ? "text/css" : f.endsWith(".js") ? "text/javascript" : "text/html"); r.end(fs.readFileSync(f)); } catch { r.statusCode = 404; r.end(); } }).listen(0);
+const port = srv.address().port;
+const browser = await chromium.launch();
+const errors = [];
+const page = await browser.newPage({ viewport: { width: 390, height: 844 }, hasTouch: true }); page.on("pageerror", (e) => errors.push(e.message));
+await page.goto(`http://127.0.0.1:${port}/`, { waitUntil: "networkidle" });
+const host = page.locator("fm-inspector");
+const sr = (fn, arg) => page.evaluate(fn, arg);
+const st = () => sr(() => { const h = document.querySelector("fm-inspector"), sh = h.shadowRoot; return { open: h.hasAttribute("open"), view: h.view, picking: h.hasAttribute("picking"), quick: h.quickEl?.className || null, boxes: sh.querySelectorAll(".ov .box").length, pill: getComputedStyle(sh.querySelector(".state")).display, rail: getComputedStyle(sh.querySelector(".rail")).display }; });
+await host.locator(".pickbtn").tap(); await page.waitForTimeout(150);
+console.log("armed:", JSON.stringify(await st()), "(expect picking, box closed, pill shown)");
+const [x, y] = await sr(() => { const r = document.querySelector(".title").getBoundingClientRect(); return [r.x + 5, r.y + 5]; });
+await page.touchscreen.tap(x, y); await page.waitForTimeout(300);
+console.log("tap on the page:", JSON.stringify(await st()), "(expect open, view quick, quick title)");
+await host.locator("#panel .close").tap(); await page.waitForTimeout(200);
+console.log("sheet closed:", JSON.stringify(await st()), "(expect picking true, box closed, pill shown, rail shown)");
+await page.touchscreen.tap(x, y); await page.waitForTimeout(300);
+console.log("tap on the page while closed:", JSON.stringify(await st()), "(expect open again)");
+await host.locator(".pickbtn").tap(); await page.waitForTimeout(150);
+console.log("icon pressed:", JSON.stringify(await st()), "(expect picking false, box closed)");
+// desktop: the same, and Escape still ends it with the box closed
+const d = await browser.newPage({ viewport: { width: 1280, height: 900 } }); await d.goto(`http://127.0.0.1:${port}/`, { waitUntil: "networkidle" });
+await d.locator("fm-inspector .pickbtn").click(); await d.waitForTimeout(100);
+const [dx, dy] = await d.evaluate(() => { const r = document.querySelector(".title").getBoundingClientRect(); return [r.x + 5, r.y + 5]; }); await d.mouse.click(dx, dy); await d.waitForTimeout(300);
+await d.locator("fm-inspector #panel .close").click(); await d.waitForTimeout(200);
+console.log("desktop closed while armed:", await d.evaluate(() => document.querySelector("fm-inspector").hasAttribute("picking")), "(expect true)");
+await d.keyboard.press("Escape"); await d.waitForTimeout(150);
+console.log("desktop Escape with the box closed:", await d.evaluate(() => document.querySelector("fm-inspector").hasAttribute("picking")), "(expect false)");
+console.log("errors:", JSON.stringify(errors));
+await browser.close(); srv.close();

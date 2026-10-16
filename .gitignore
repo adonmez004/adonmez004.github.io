@@ -1,1 +1,8 @@
 node_modules/
+
+# the browser suites: their packages, run outputs, screenshots and logs
+tests/node_modules/
+tests/runs/
+tests/*.png
+tests/runs-*.log
+tests/bigpage-timings.json

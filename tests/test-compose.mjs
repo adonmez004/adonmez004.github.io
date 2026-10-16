@@ -1,0 +1,34 @@
+// One tool at a time (v0.2): a resize stands when the ruler, the quick view or the resize tool take over, but only one tool is armed; the quick view's page click opens its box; Escape ends the armed tool and closes its box
+import { chromium } from "playwright";
+import http from "node:http"; import fs from "node:fs"; import path from "node:path";
+const QR = (process.env.QR_DIR || new URL("../../qr-code-component/", import.meta.url).pathname), LOCAL = (process.env.INSPECTOR || new URL("../inspector.js", import.meta.url).pathname);
+const srv = http.createServer((q, r) => { const u = q.url.split("?")[0]; const f = path.join(QR, u === "/" ? "index.html" : u); try { r.setHeader("content-type", f.endsWith(".css") ? "text/css" : f.endsWith(".png") ? "image/png" : "text/html"); r.end(fs.readFileSync(f)); } catch { r.statusCode = 404; r.end(); } }).listen(0);
+const browser = await chromium.launch();
+const errors = [];
+const page = await browser.newPage({ viewport: { width: 1280, height: 900 } }); page.on("pageerror", (e) => errors.push(e.message));
+await page.route("https://demo.frontendmentorsolutions.io/inspector.js", (r) => r.fulfill({ path: LOCAL, contentType: "text/javascript" }));
+await page.goto(`http://127.0.0.1:${srv.address().port}/`, { waitUntil: "networkidle" });
+const host = page.locator("fm-inspector"); const sr = (f, a) => page.evaluate(f, a);
+const state = () => sr(() => { const i = document.querySelector("fm-inspector"), sh = i.shadowRoot; return { sizing: i.sizing, picking: i.picking, measuring: i.measuring, open: i.hasAttribute("open"), view: i.view, target: i.sizeTarget?.localName || null, handle: getComputedStyle(sh.querySelector(".hd")).display, head: sh.querySelector(".wval").textContent, sized: i.sized.size, imgStyle: document.querySelector("img").getAttribute("style"), pill: sh.querySelector(".state").textContent, free: [...sh.querySelectorAll(".free")].map((b) => Math.round(parseFloat(b.style.width))), fv: [...sh.querySelectorAll(".lb.fv")].map((l) => l.textContent) }; });
+const park = () => sr(() => { const h = document.querySelector("fm-inspector"); if (h.hasAttribute("open")) h.moveTo(innerWidth - h.panel.offsetWidth - 8, 8); }); // the size box opens on the choice and can cover the handle: parked on the left
+const choose = async (sel) => { await sr((s) => document.querySelector("fm-inspector").chooseSize(document.querySelector(s)), sel); await page.waitForTimeout(150); await park(); await page.waitForTimeout(100); };
+const drag = async (dx) => { const b = await host.locator(".hd").boundingBox(); const x = b.x + b.width / 2, y = b.y + b.height / 2; await page.mouse.move(x, y); await page.mouse.down(); for (let i = 1; i <= 6; i++) await page.mouse.move(x + dx * i / 6, y); await page.mouse.up(); await page.waitForTimeout(300); };
+const clickPage = async (sel) => { const b = await page.locator(sel).boundingBox(); await page.mouse.click(b.x + b.width / 2, b.y + b.height / 2); await page.waitForTimeout(300); };
+await host.locator(".sizebtn").click(); await page.waitForTimeout(150); await choose("img"); await drag(-60);
+console.log("resized:", JSON.stringify(await state()), "(expect sizing true, target img, open on the size view, sized 1)");
+await host.locator(".measure").click(); await page.waitForTimeout(300);
+console.log("ruler on:", JSON.stringify(await state()), "(expect sizing false and the box closed: one tool at a time; measuring true; sized 1, the img keeps its style)");
+await host.locator(".pickbtn").click(); await page.waitForTimeout(300);
+console.log("quick view armed:", JSON.stringify(await state()), "(expect measuring false, picking true, pill Quick view)");
+await clickPage("h1");
+console.log("page click opens the quick box:", JSON.stringify(await state()), "(expect open true, view quick, picking still true)");
+await page.keyboard.press("Escape"); await page.waitForTimeout(300);
+console.log("Escape:", JSON.stringify(await state()), "(expect picking false, box closed, sized still 1)");
+await host.locator(".sizebtn").click(); await page.waitForTimeout(150); await clickPage("p");
+console.log("resize armed, page click chooses:", JSON.stringify(await state()), "(expect sizing true, target p, view size)");
+await host.locator(".pickbtn").click(); await page.waitForTimeout(300);
+console.log("quick view over the resize tool:", JSON.stringify(await state()), "(expect sizing false, picking true, box closed, sized 1, img style kept)");
+await host.locator(".pickbtn").click(); await page.waitForTimeout(300);
+console.log("quick view off:", JSON.stringify(await state()), "(expect picking false, sized 1)");
+console.log("errors:", JSON.stringify(errors));
+await browser.close(); srv.close();

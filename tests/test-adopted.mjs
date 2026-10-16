@@ -1,0 +1,24 @@
+// Adopted stylesheets: their rules listed in document order, re-listed when the list changes (v0.2: the CSS view opened with Show All)
+import { chromium } from "playwright";
+import { openBox } from "./lib/browser.mjs";
+import http from "node:http"; import fs from "node:fs"; import path from "node:path";
+const ROOT = new URL("./site/", import.meta.url).pathname, LOCAL = (process.env.INSPECTOR || new URL("../inspector.js", import.meta.url).pathname);
+const srv = http.createServer((q, r) => { const f = q.url === "/inspector.js" ? LOCAL : path.join(ROOT, q.url === "/" ? "index.html" : q.url); try { r.setHeader("content-type", f.endsWith(".css") ? "text/css" : f.endsWith(".js") ? "text/javascript" : "text/html"); r.end(fs.readFileSync(f)); } catch { r.statusCode = 404; r.end(); } }).listen(0);
+const port = srv.address().port;
+const browser = await chromium.launch();
+const page = await browser.newPage({ viewport: { width: 1280, height: 900 } });
+const errors = []; page.on("pageerror", (e) => errors.push(e.message));
+await page.goto(`http://127.0.0.1:${port}/`, { waitUntil: "networkidle" });
+const host = page.locator("fm-inspector");
+await openBox(page, host, "css");
+await page.evaluate(() => { const a = new CSSStyleSheet(); a.replaceSync(".btn { color: rgb(200, 0, 0); }"); const b = new CSSStyleSheet(); b.replaceSync(".btn { color: rgb(0, 0, 200); }"); window.ab = [a, b]; document.adoptedStyleSheets = [a, b]; });
+await page.waitForTimeout(900);
+const order = () => page.evaluate(() => [...document.querySelector("fm-inspector").shadowRoot.querySelectorAll("#view-css .d .v")].map((v) => v.textContent).filter((t) => /200/.test(t)));
+const live = () => page.evaluate(() => getComputedStyle(document.querySelector(".btn")).color);
+console.log("[A, B]: live", await live(), "panel", JSON.stringify(await order()));
+await page.evaluate(() => { document.adoptedStyleSheets = [window.ab[0], window.ab[1], window.ab[0]]; }); await page.waitForTimeout(1200);
+console.log("[A, B, A]: live", await live(), "panel", JSON.stringify(await order()), "(expect blue then red: A cascades last)");
+await page.evaluate(() => { document.adoptedStyleSheets = [window.ab[0], window.ab[1]]; }); await page.waitForTimeout(1200);
+console.log("[A, B] again: live", await live(), "panel", JSON.stringify(await order()));
+console.log("errors:", JSON.stringify(errors));
+await browser.close(); srv.close();

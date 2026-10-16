@@ -1,0 +1,24 @@
+// The box itself: dragged by its head, grown and shrunk by its edges (v0.2: opened through the rail, `#panel` and `#panel .head` since a second box shares the classes)
+import { chromium } from "playwright";
+import { openBox } from "./lib/browser.mjs";
+const LOCAL = (process.env.INSPECTOR || new URL("../inspector.js", import.meta.url).pathname);
+const browser = await chromium.launch();
+const ctx = await browser.newContext({ viewport: { width: 1280, height: 900 } });
+const page = await ctx.newPage();
+await page.route("https://demo.frontendmentorsolutions.io/inspector.js", (r) => r.fulfill({ path: LOCAL, contentType: "text/javascript" }));
+await page.goto("https://demo.frontendmentorsolutions.io/qr-code-component/", { waitUntil: "networkidle" });
+const host = page.locator("fm-inspector");
+await openBox(page, host, "html");
+const rect = async () => { const b = await host.locator("#panel").boundingBox(); return { top: Math.round(b.y), bottom: Math.round(b.y + b.height), h: Math.round(b.height) }; };
+const drag = async (loc, dx, dy) => { const b = await loc.boundingBox(); const x = b.x + b.width / 2, y = b.y + b.height / 2; await page.mouse.move(x, y); await page.mouse.down(); for (let i = 1; i <= 10; i++) await page.mouse.move(x + dx * i / 10, y + dy * i / 10); await page.mouse.up(); await page.waitForTimeout(100); };
+console.log("start:", JSON.stringify(await rect()));
+await drag(host.locator("#panel .head"), 0, -300);
+console.log("after moving up 300:", JSON.stringify(await rect()));
+await drag(host.locator(".rz.s"), 0, 120);
+console.log("after dragging S edge down 120:", JSON.stringify(await rect()));
+await drag(host.locator(".rz.n"), 0, -80);
+console.log("after dragging N edge up 80:", JSON.stringify(await rect()));
+await drag(host.locator(".rz.s"), 0, -100);
+console.log("after dragging S edge up 100:", JSON.stringify(await rect()));
+console.log("folded by the drags:", await page.evaluate(() => document.querySelector("fm-inspector").shadowRoot.querySelector("#panel").hasAttribute("data-folded")), "(expect false: a drag is not a click)");
+await browser.close();

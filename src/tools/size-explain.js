@@ -1,6 +1,6 @@
 // What the layout allows an element's width, and why a resize did not land: measurements off the live page (computed styles, rects, scroll sizes)
 // and the rule that held the size, named for the bar and the CSS tab. Nothing here touches the inspector's state; the resize tool asks and acts.
-import { num, name } from "../util.js";
+import { num, fmt, name } from "../util.js";
 import { helper } from "../foreign.js";
 
 export const sizeProp = (el) => (/^(vertical|sideways)/.test(getComputedStyle(el).writingMode) ? "block-size" : "inline-size");
@@ -110,6 +110,78 @@ export function parentBase(store, el) {
   const pcs = getComputedStyle(parent);
   if (/grid/.test(pcs.display) && sizeLimits(store, el, cs).whyW !== "grid") return 0; // an auto track: cyclic
   return contentWidth(parent);
+}
+
+const reaches = (store, m, target) => !m.inlineEl && m.decls.some((d) => d.type === "decl" && d.on) && store.matchModel(m, [target]).length > 0;
+export const rulesOf = (store, target) => [...store.models.filter((m) => reaches(store, m, target)), ...store.models.filter((m) => m.inlineEl === target)];
+const find = (models, props) => { for (const m of [...models].reverse()) for (const d of [...m.decls].reverse()) if (d.type === "decl" && d.on && d.live && props.includes(d.prop)) return d; return null; };
+const say = (d) => [{ p: d.prop }, ": ", { v: d.value }]; // a declaration as parts: the property, the value
+const E = (el) => ({ e: name(el) }); // an element's name as a part
+
+export function widthWhy(store, a) {
+  // What sets an element's width, in a few words: its own max/min/width rule, a percentage of the parent, a grid track, hugging its content, filling the parent, the viewport
+  const acs = getComputedStyle(a), ar = a.getBoundingClientRect(), own = rulesOf(store, a), parent = a.parentElement;
+  if (a === document.documentElement || a === document.body) { const w = find(own, ["width", "inline-size", "max-width", "max-inline-size"]); return w ? say(w) : ["the viewport"]; }
+  const pad = extraOf(acs);
+  const maxD = find(own, ["max-width", "max-inline-size"]), minD = find(own, ["min-width", "min-inline-size"]), sizeD = find(own, ["width", "inline-size"]);
+  if (acs.maxWidth !== "none" && Math.abs(num(acs.maxWidth) + pad - ar.width) <= 1) return maxD ? say(maxD) : [{ p: "max-width" }, ": ", { v: acs.maxWidth }];
+  if (acs.minWidth !== "auto" && num(acs.minWidth) > 0 && Math.abs(num(acs.minWidth) + pad - ar.width) <= 1) return minD ? say(minD) : [{ p: "min-width" }, ": ", { v: acs.minWidth }];
+  if (sizeD && !/^(auto|fit-content|max-content|min-content)$/.test(sizeD.value)) return /%$/.test(sizeD.value) && parent ? [...say(sizeD), " of ", E(parent)] : say(sizeD);
+  if (!parent) return ["the viewport"];
+  if (/absolute|fixed/.test(acs.position)) return acs.left !== "auto" && acs.right !== "auto" ? ["both insets"] : ["its content"];
+  const pcs = getComputedStyle(parent), limit = sizeLimits(store, a, acs);
+  if (limit.whyW === "grid") { const g = find(rulesOf(store, parent), ["grid-template-columns", "grid-template", "grid"]); return [E(parent), " grid track: ", { v: g ? g.value : fmt(limit.w) + "px" }]; }
+  const shrinks = /inline-block|inline-flex|inline-grid|table/.test(acs.display) || acs.float !== "none" || (/flex/.test(pcs.display) && !/column/.test(pcs.flexDirection) && num(acs.flexGrow) === 0) || (/grid/.test(pcs.display) && /start|end|center/.test(pcs.justifyItems) && acs.justifySelf === "auto") || /start|end|center|self/.test(acs.justifySelf);
+  if (shrinks) {
+    if (/grid/.test(pcs.display)) { const g = find(rulesOf(store, parent), ["place-items", "justify-items"]); return ["hugs its content: ", E(parent), " grid", ...(g ? [": ", ...say(g)] : [])]; }
+    if (/flex/.test(pcs.display)) return ["hugs its content: a flex item of ", E(parent), " with no ", { p: "flex-grow" }];
+    return ["hugs its content (", { v: acs.float !== "none" ? "float" : acs.display }, ")"];
+  }
+  if (/^inline$/.test(acs.display)) return ["its content (", { v: "inline" }, ")"];
+  const inner = contentWidth(parent), outer = ar.width + Math.max(num(acs.marginLeft), 0) + Math.max(num(acs.marginRight), 0);
+  if (Math.abs(inner - outer) <= 1) return ["fills ", E(parent)];
+  return [E(parent), " leaves ", { v: fmt(inner) + "px" }, "; the margins take the rest"];
+}
+
+export function heightWhy(store, a) {
+  // What sets an element's height, in a few words: its own max/min/height rule, an aspect ratio, a replaced element's intrinsic size, a stretch, else its content
+  const acs = getComputedStyle(a), ar = a.getBoundingClientRect(), own = rulesOf(store, a), parent = a.parentElement;
+  const pad = acs.boxSizing === "content-box" ? num(acs.paddingTop) + num(acs.paddingBottom) + num(acs.borderTopWidth) + num(acs.borderBottomWidth) : 0;
+  const maxD = find(own, ["max-height", "max-block-size"]), minD = find(own, ["min-height", "min-block-size"]), sizeD = find(own, ["height", "block-size"]);
+  if (acs.maxHeight !== "none" && Math.abs(num(acs.maxHeight) + pad - ar.height) <= 1) return maxD ? say(maxD) : [{ p: "max-height" }, ": ", { v: acs.maxHeight }];
+  if (acs.minHeight !== "auto" && num(acs.minHeight) > 0 && Math.abs(num(acs.minHeight) + pad - ar.height) <= 1) return minD ? say(minD) : [{ p: "min-height" }, ": ", { v: acs.minHeight }];
+  if (sizeD && !/^(auto|fit-content|max-content|min-content)$/.test(sizeD.value)) return /%$/.test(sizeD.value) && parent ? [...say(sizeD), " of ", E(parent)] : say(sizeD);
+  if (a === document.documentElement && Math.abs(ar.height - innerHeight) <= 1) return ["the viewport"];
+  const ratio = find(own, ["aspect-ratio"]);
+  if (ratio && acs.aspectRatio !== "auto") return [...say(ratio), ", from its width"];
+  if (/^(img|video|canvas|svg|iframe|embed|object)$/.test(a.localName)) {
+    const w = a.naturalWidth || a.videoWidth, h = a.naturalHeight || a.videoHeight;
+    return h ? ["its intrinsic ratio (", { v: `${w} × ${h}` }, "), from its width"] : ["its intrinsic size"];
+  }
+  if (/absolute|fixed/.test(acs.position) && acs.top !== "auto" && acs.bottom !== "auto") return ["both insets"];
+  if (parent) {
+    const pcs = getComputedStyle(parent), pr = parent.getBoundingClientRect();
+    const inner = pr.height - num(pcs.paddingTop) - num(pcs.paddingBottom) - num(pcs.borderTopWidth) - num(pcs.borderBottomWidth);
+    const outer = ar.height + Math.max(num(acs.marginTop), 0) + Math.max(num(acs.marginBottom), 0);
+    const stretch = acs.alignSelf === "stretch" || (acs.alignSelf === "auto" && /normal|stretch/.test(pcs.alignItems));
+    if (/flex/.test(pcs.display) && !/column/.test(pcs.flexDirection) && stretch && Math.abs(inner - outer) <= 1) return ["stretches to ", E(parent), "'s row"];
+    if (/flex/.test(pcs.display) && /column/.test(pcs.flexDirection) && num(acs.flexGrow) > 0 && Math.abs(inner - outer) > 1) return ["grows in ", E(parent), "'s column"];
+    if (/grid/.test(pcs.display) && stretch && Math.abs(inner - outer) <= 1) return ["stretches to ", E(parent), "'s grid"];
+  }
+  return ["its content"];
+}
+
+export function sizeLadder(store, el) {
+  // The CSS box's "Show Size" and the quick view: the element's width and height and what sets each, then the same for each parent up to the body.
+  // Entries { el, name, w, h, width: parts, height: parts }, read-only
+  const out = [];
+  if (!el.getBoundingClientRect().width) return out;
+  for (let a = el; a; a = a.parentElement) {
+    const r = a.getBoundingClientRect();
+    out.push({ el: a, name: name(a), w: r.width, h: r.height, width: widthWhy(store, a), height: heightWhy(store, a) });
+    if (a === document.body) break;
+  }
+  return out;
 }
 
 export function explainSize(store, el, wantW, cap) {

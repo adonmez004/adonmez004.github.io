@@ -1,0 +1,12 @@
+{
+  "name": "inspector-browser-suites",
+  "private": true,
+  "description": "The Playwright suites that drive the built inspector.js in a browser. `npm install` here, then `npx playwright install chromium` once; `node run-all.mjs <label>` runs every test-*.mjs and writes its output under runs/<label>/.",
+  "type": "module",
+  "scripts": {
+    "all": "node run-all.mjs"
+  },
+  "devDependencies": {
+    "playwright": "^1.63.0"
+  }
+}

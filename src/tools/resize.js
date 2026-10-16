@@ -1,9 +1,9 @@
 // The resize tool: one element at a time, chosen by a page click, its width dragged by the corner handle (or stepped by the arrow keys) and written
 // inline; the layout's limits hold, the children resized earlier narrow with their parent, every step goes on its own undo stack, and the rule that
-// held a drag is named on the bar and lit in the CSS tab. It reaches the panel through `ui` alone:
-// host (the element: its sizing/resizing attributes), els { btn, handle, wval, wblock, hreset, sundo, sreset }, tools, store, painter,
-// paint(), queueLoad(), dirtyHtml(), syncRow(d), revealRow(d), gesture(e, move, done), suppressClick(), cancelGesture(), finishEdit()
-import { num, fmt, name } from "../util.js";
+// held a drag is named in the tool's own view in the box and lit in the CSS view. It reaches the panel through `ui` alone:
+// host (the element: its sizing/resizing attributes), els { btn, handle, wval, wnow, wblock, hreset }, tools, store, painter,
+// paint(), box(on), goTo(el, d), toggleDecl(d, on), queueLoad(), dirtyHtml(), syncRow(d), revealRow(d), gesture(e, move, done), suppressClick(), cancelGesture(), finishEdit()
+import { num, fmt, name, span } from "../util.js";
 import { helper } from "../foreign.js";
 import { History } from "../history.js";
 import { sizeProp, sizeOf, extraOf, contentWidth, resizeSupported, contentNeed, overflow, sizeLimits, parentBase, explainSize } from "./size-explain.js";
@@ -15,16 +15,15 @@ export class Resizer {
     this.sizing = false; // armed: a click on the page chooses the element, its corner handle drags its width
     this.target = null; // the chosen element
     this.sized = new Map(); // element -> its style attribute before the first resize, for Reset
-    this.wrote = new WeakMap(); // element -> { attr, prop }: the style attribute as the tool last left it and the property it wrote; a live size that differs is the page's
+    this.wrote = new WeakMap(); // element -> { attr, prop, written }: the last observed or written size; observations detect page changes before the first move
     this.drag = null; // the element under a running drag
     this.cap = { x: null, y: null }; // the limit the last step met: parent, grid, content
     this.hugs = new Set(); // the parents seen growing with their element this session: content-sized, never written 100% against
     this.blocked = null; // the declaration found to keep the last resize from landing
     this.heldArea = null; // the element framed on the page as the area that held it
-    this.history = new History((n) => { els.sundo.disabled = !n; }); // resizes, newest last: [{ el, before, after, prop }] style attributes
+    this.first = new WeakMap(); // element -> { w, h }: its size when the tool first chose it, the head's line; a resize shows the size now under it with the difference
+    this.history = new History(() => {}); // resizes, newest last: [{ el, before, after, prop }] style attributes; no control wears the undo since the row left the view, `undo()` stands for the box's coming undo
     this.handleEvents(els.handle);
-    els.sundo.addEventListener("click", () => this.undo());
-    els.sreset.addEventListener("click", () => this.resetAll());
     ui.tools.register("sizing", {
       label: "Click an element to resize · Esc to end",
       handlers: () => ({
@@ -37,7 +36,7 @@ export class Resizer {
 
   setSizing(on) {
     // The resize tool and the picker stand together: the one armed last takes the page's clicks, the other keeps its state (the chosen element,
-    // its handle and bar; the picks) and takes the clicks back when that one ends. Closing a tool closes its own things only
+    // its handle and view; the picks) and takes the clicks back when that one ends. Closing a tool closes its own things only
     if (on === this.sizing) return;
     if (!on) this.cancel();
     this.sizing = on;
@@ -49,9 +48,10 @@ export class Resizer {
       this.setBlocked(null, "");
       this.ui.els.handle.removeAttribute("data-on");
       this.ui.els.hreset.removeAttribute("data-on");
-      this.ui.els.wval.textContent = "";
+      this.ui.els.wval.textContent = ""; this.ui.els.wnow.replaceChildren();
       this.ui.tools.end("sizing");
     }
+    if (!on) this.ui.box(false); // the box closes with the tool; it opens on the first choice, not on the arm (Alper: "resize'a basar basmaz box'ın açılmasına gerek yok")
     this.ui.paint();
   }
 
@@ -60,7 +60,7 @@ export class Resizer {
     for (const el of this.sized.keys()) if (!el.isConnected || helper(el)) this.sized.delete(el);
     if (this.target && (!this.target.isConnected || helper(this.target))) {
       this.cancel();
-      this.target = null; this.ui.els.handle.removeAttribute("data-on"); this.ui.els.hreset.removeAttribute("data-on"); this.ui.els.wval.textContent = "";
+      this.target = null; this.ui.els.handle.removeAttribute("data-on"); this.ui.els.hreset.removeAttribute("data-on"); this.ui.els.wval.textContent = ""; this.ui.els.wnow.replaceChildren();
     }
   }
 
@@ -81,7 +81,7 @@ export class Resizer {
         el.style.setProperty(prop, extra ? `calc(100% - ${fmt(extra)}px)` : "100%", el.style.getPropertyPriority(prop));
       }
     }
-    this.wrote.set(el, { attr: el.getAttribute("style"), prop });
+    this.wrote.set(el, { attr: el.getAttribute("style"), prop, written: true });
     return base > 0 && px > base + 0.5 && !this.hugs.has(parent); // capped at the parent
   }
 
@@ -92,7 +92,7 @@ export class Resizer {
     const want = sizeOf(el, attr, prop);
     this.ui.store.writeProperty(el.style, want.prop, want.value, want.priority);
     if (el.style.cssText === want.cssText) { if (attr == null) el.removeAttribute("style"); else el.setAttribute("style", attr); }
-    this.wrote.set(el, { attr: el.getAttribute("style"), prop });
+    this.wrote.set(el, { attr: el.getAttribute("style"), prop, written: true });
   }
 
   pageSized(el) {
@@ -120,7 +120,7 @@ export class Resizer {
   }
 
   explain(el, want) {
-    // The reason the width did not land, onto the bar, the CSS tab and the page; nothing when it did
+    // The reason the width did not land, into the view, the CSS tab and the page; nothing when it did
     const held = explainSize(this.ui.store, el, want, this.cap?.x);
     if (held) this.setBlocked(held.d, held.text, held.area); else this.setBlocked(null, "");
   }
@@ -130,16 +130,32 @@ export class Resizer {
     // The element's own rule first (the row alone says it); when the hold came from outside, the holding AREA is framed on the page with the reason:
     // the parent (content-sized, a grid track, its own width rule, the grandparent's grid or flex) or the child whose content reaches furthest
     const was = this.blocked;
-    this.blocked = d; this.ui.els.wblock.textContent = text; this.heldArea = text ? area : null;
+    this.blocked = d; this.heldArea = text ? area : null;
+    const { wblock } = this.ui.els; wblock.replaceChildren();
+    if (!text) { if (was) this.ui.syncRow(was); return; }
+    if (d) { // the holding declaration itself, with its tick: off, and the next step is free of it; the words around it say whose it is
+      const shown = `${d.prop}: ${d.value}${d.important ? " !important" : ""}`;
+      const note = (text.includes(shown) ? text.replace(shown, "") : text.includes(`${d.prop}: ${d.value}`) ? text.replace(`${d.prop}: ${d.value}`, "") : text.replace(`: ${d.value}`, ":")).trim(); // the words around the declaration: `held by`, `div:` (the parent's name), `grid track:`
+      const label = document.createElement("label"); label.className = "hdecl";
+      const box = document.createElement("input"); box.type = "checkbox"; box.checked = d.on; box.setAttribute("aria-label", `${d.prop}: ${d.value}`);
+      box.addEventListener("change", () => { this.ui.toggleDecl(d, box.checked); label.classList.toggle("off", !d.on); });
+      label.append(box, span("t", `${d.prop}: `), span("v", d.value), ...(d.important ? [" ", span("x", "!important")] : [])); label.classList.toggle("off", !d.on);
+      wblock.append(span("hnote", note ? `${note} ` : ""), label);
+    } else wblock.append(span("hnote", text));
+    if (this.target) { const go = document.createElement("button"); go.type = "button"; go.className = "wgo"; go.textContent = "Go to this element"; go.addEventListener("click", () => this.ui.goTo(this.target, d)); wblock.append(go); } // the element's whole CSS in the second box
     if (was) this.ui.syncRow(was);
     if (d) { this.ui.syncRow(d); this.ui.revealRow(d); }
   }
 
+  blockedText() { const w = this.ui.els.wblock; return w.childNodes.length ? [...w.childNodes].filter((n) => !n.classList?.contains("wgo")).map((n) => n.textContent).join("").trim() : ""; } // the reason alone, without the door's words
+
   choose(el) {
-    // The chosen element: the corner handle moves onto it, the top bar reads its size
+    // The chosen element: the corner handle moves onto it, the view's head reads its size
     this.setBlocked(null, "");
     this.target = el;
+    if (!this.first.has(el)) { const r = el.getBoundingClientRect(); this.first.set(el, { w: r.width, h: r.height }); }
     this.ui.els.handle.setAttribute("data-on", "");
+    this.ui.box(true); // the tool's box opens on the choice
     this.ui.paint();
   }
 
@@ -160,8 +176,8 @@ export class Resizer {
         if (!this.drag) return;
         // The warning comes up the moment the drag meets a limit, and goes the moment it leaves it
         const held = this.cap.x || Math.abs(el.getBoundingClientRect().width - want) > 1, now = performance.now();
-        if (held && (!this.ui.els.wblock.textContent || now - (this.explainedAt || 0) > 200)) { this.explainedAt = now; this.explain(el, want); }
-        else if (!held && this.ui.els.wblock.textContent) this.setBlocked(null, "");
+        if (held && (!this.blockedText() || now - (this.explainedAt || 0) > 200)) { this.explainedAt = now; this.explain(el, want); }
+        else if (!held && this.blockedText()) this.setBlocked(null, "");
       }, (_, cancelled) => {
         this.finish(session, cancelled);
         this.ui.suppressClick();
@@ -186,6 +202,12 @@ export class Resizer {
     const cs = getComputedStyle(el);
     const kids = [...this.sized.keys()].filter((kid) => kid !== el && el.contains(kid) && kid.isConnected);
     const before = new Map([el, ...kids].map((node) => [node, node.getAttribute("style")]));
+    // Observe without claiming a write. A page change before our first move must be detectable,
+    // and a cancelled press that wrote nothing must never restore the page's style.
+    for (const [node, attr] of before) {
+      if (this.pageSized(node)) this.sized.set(node, attr);
+      this.wrote.set(node, { attr, prop: sizeProp(node), written: false });
+    }
     this.cap = { x: null, y: null }; this.hugs = new Set();
     this.drag = el; this.ui.host.setAttribute("resizing", "");
     return { el, kids, before, extra: extraOf(cs), limit: sizeLimits(this.ui.store, el, cs) };
@@ -198,11 +220,18 @@ export class Resizer {
     const { el, kids, before, extra, limit } = session;
     if (!el.isConnected || helper(el)) { this.cancel(); return; }
     if (!resizeSupported(el)) { this.cancel(); this.setBlocked(null, "transformed: edit the CSS value instead"); return; }
+    // A size the page wrote since the tool's last write is the page's: the step starts from it, and a cancel or an undo returns to it, not to the drag's start
+    for (const node of [el, ...kids]) if (this.pageSized(node)) { const attr = node.getAttribute("style"); before.set(node, attr); this.sized.set(node, attr); } // the Reset's record moves with it
     let w = Math.max(1, desired);
     this.cap = { x: null, y: null };
     if (w > limit.w) { w = limit.w; this.cap.x = limit.whyW; }
+    // The box the element must stay inside is the nearest ancestor's content box that does NOT move with it: an ancestor whose content box moved
+    // with the write hugs its content (it grows with the element, up to its own limit) and the bound is the one above it, down to the body
+    const chain = []; for (let a = el.parentElement; a && a !== document.documentElement; a = a.parentElement) chain.push({ a, was: contentWidth(a) });
     if (this.writeSize(el, Math.round(w - extra))) this.cap.x ||= "parent";
-    const over = limit.parent ? overflow(el, limit.parent) : null;
+    let bound = chain.at(-1)?.a || null;
+    for (const { a, was } of chain) { if (Math.abs(contentWidth(a) - was) > 0.5) this.hugs.add(a); else { bound = a; break; } }
+    const over = limit.parent && bound ? overflow(el, bound) : null;
     if (over?.x > 0.5) { this.writeSize(el, Math.max(1, Math.round(w - over.x - extra))); this.cap.x ||= "parent"; }
     for (let pass = 0; ; pass++) {
       for (const kid of kids) this.restoreSize(kid, before.get(kid));
@@ -217,9 +246,9 @@ export class Resizer {
   finish(session, cancelled) {
     // A cancelled session puts the size properties back; a finished one records what changed as one undo entry
     // A step's "after" is the tool's own last write, so a size the page wrote between the last move and the release is not undone as if it were the tool's
-    if (cancelled) for (const [node, attr] of session.before) this.restoreSize(node, attr, this.wrote.get(node)?.prop);
+    if (cancelled) for (const [node, attr] of session.before) { if (this.wrote.get(node)?.written && !this.pageSized(node)) this.restoreSize(node, attr, this.wrote.get(node)?.prop); } // a size the page wrote after the last move stands
     else {
-      const steps = [...session.before].filter(([node, attr]) => node.isConnected && node.getAttribute("style") !== attr)
+      const steps = [...session.before].filter(([node, attr]) => this.wrote.get(node)?.written && node.isConnected && node.getAttribute("style") !== attr)
         .map(([node, attr]) => ({ el: node, before: attr, after: this.wrote.get(node)?.attr ?? node.getAttribute("style"), prop: this.wrote.get(node)?.prop }));
       if (steps.length) this.history.push(steps);
     }
@@ -245,7 +274,7 @@ export class Resizer {
   }
 
   undo() {
-    // The top bar's undo: the last resize back, the children it narrowed and the handle's Reset included.
+    // Undo: the last resize back, the children it narrowed and the handle's Reset included.
     // A step whose size the page has written since (another value, another priority) is skipped: the page's write stands
     this.cancel();
     const entry = this.history.pop();
@@ -265,7 +294,7 @@ export class Resizer {
   }
 
   resetAll() {
-    // The top bar's Reset all: every resized element back to its own size, the history cleared
+    // Clear all's part: every resized element back to its own size, the history cleared
     this.cancel();
     let skipped = 0;
     for (const [el, attr] of this.sized) { if (this.pageSized(el)) skipped++; else this.restoreSize(el, attr, this.wrote.get(el)?.prop); }
@@ -278,18 +307,30 @@ export class Resizer {
     // The area that held the resize: a red dashed frame with the reason on a red chip (the name chip's spots, never over a control)
     const { painter } = this.ui, { r } = painter.geometry(el);
     painter.box("dbox", r.left, r.top, r.width, r.height);
-    painter.chip(painter.label("hold", this.ui.els.wblock.textContent, 0, 0), r, chrome);
+    painter.chip(painter.label("hold", this.blockedText(), 0, 0), r, chrome);
   }
 
-  paintSizer(el) {
-    // The chosen element: its frame, the handle on its bottom-right corner (kept reachable inside the viewport), its live size in the top bar
+  paintSizer(el, chrome = []) {
+    // The chosen element: its frame, the handle on its bottom-right corner (kept reachable inside the viewport), its live size in the view's head
     const { painter, els } = this.ui, { r } = painter.geometry(el);
     painter.box("box", r.left, r.top, r.width, r.height);
-    els.wval.textContent = `${name(el)} ${fmt(r.width)} × ${fmt(r.height)}px`;
+    const first = this.first.get(el) || { w: r.width, h: r.height }, dw = r.width - first.w, dh = r.height - first.h;
+    els.wval.textContent = `${name(el)} ${fmt(first.w)} × ${fmt(first.h)}px`;
+    const sign = (d) => (Math.abs(d) < 0.01 ? "0" : (d > 0 ? "+" : "−") + fmt(Math.abs(d))); const diff = document.createElement("span"); diff.className = "wdiff"; diff.textContent = `${sign(dw)} × ${sign(dh)}px`;
+    els.wnow.replaceChildren(`${fmt(r.width)} × ${fmt(r.height)}px`, diff); // the size now with the difference, 0 × 0px before a resize
+    if (Math.abs(dw) >= 0.01 || Math.abs(dh) >= 0.01) { // a changed size reads on the page too: a line along the width and one along the height, each with its number
+      const above = r.top >= 32, y = above ? r.top - 10 : r.top + 10;
+      painter.box("ln dim-width", r.left, y, r.width, 1);
+      painter.place(painter.label("sz", `${fmt(r.width)}px`, 0, y + (above ? -12 : 12)), "left", r.left, r.right, chrome);
+      const beside = painter.beside(r, chrome), x = beside ? r.right + 10 : r.right - 10;
+      painter.box("ln dim-height", x, r.top, 1, r.height);
+      const l = painter.label("sz", `${fmt(r.height)}px`, x + (beside ? 8 : -8), 0); l.style.transform = beside ? "translate(0, -50%)" : "translate(-100%, -50%)";
+      painter.place(l, "top", r.top, r.bottom, chrome);
+    }
     const supported = resizeSupported(el);
     els.handle.disabled = !supported;
     els.handle.setAttribute("aria-label", `Adjust the width of ${name(el)}: ${fmt(r.width)}px`);
-    if (!supported && !els.wblock.textContent) this.setBlocked(null, "transformed: edit the CSS value instead");
+    if (!supported && !this.blockedText()) this.setBlocked(null, "transformed: edit the CSS value instead");
     const half = els.handle.offsetWidth / 2 || 16;
     const hx = Math.min(Math.max(r.right, half), innerWidth - half), hy = Math.min(Math.max(r.bottom, half), innerHeight - half);
     els.handle.style.left = `${hx}px`;

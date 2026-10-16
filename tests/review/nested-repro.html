@@ -1,0 +1,23 @@
+<!doctype html><meta charset="utf-8"><title>Nested declaration reproduction</title>
+<style>body{font:16px system-ui;margin:24px}#target{width:240px;height:70px;color:red;&:hover{color:blue}background:yellow}button{font:inherit;padding:12px;margin-top:16px}pre{white-space:pre-wrap}</style>
+<h1>Nested declaration reproduction</h1><p>Expected after editing: green target and matching CSSOM.</p><div id="target">Target</div><button id="run">Run nested edit</button><pre id="results">Ready</pre>
+<script type="module">
+const q=new URLSearchParams(location.search),native=q.get('mode')==='native',engine=q.get('engine')||'unknown';
+if(!native)await import('/inspector.js');
+document.querySelector('#run').onclick=async()=>{
+ const target=document.querySelector('#target'),i=document.querySelector('fm-inspector');
+ let result={engine,native,userAgent:navigator.userAgent};
+ try{
+  if(i){i.toggle(true);await i.load();for(let j=0;j<6;j++)await new Promise(done=>requestAnimationFrame(done));if(i.loading)await i.loading;}
+  const before=getComputedStyle(target).backgroundColor;
+  if(i){const d=i.store.allDecls.find(d=>d.prop==='background'&&d.model.selector==='#target');if(!d)throw Error('Nested background model missing');result.accepted=i.cssView.change(d,'green');}
+  else {const rule=[...document.styleSheets[0].cssRules].find(r=>r.selectorText==='#target');const nested=[...rule.cssRules].find(r=>!r.selectorText&&r.style);nested.style.setProperty('background','green');}
+  result.before=before;result.immediate=getComputedStyle(target).backgroundColor;
+  await new Promise(done=>requestAnimationFrame(()=>requestAnimationFrame(done)));result.afterFrames=getComputedStyle(target).backgroundColor;
+  await new Promise(done=>setTimeout(done,300));result.afterDelay=getComputedStyle(target).backgroundColor;
+  result.pass=result.afterDelay==='rgb(0, 128, 0)';result.cssText=[...document.styleSheets[0].cssRules].find(r=>r.selectorText==='#target').cssText;
+ }catch(error){result.error=error.message;result.pass=false;}
+ document.querySelector('#results').textContent=JSON.stringify(result,null,2);
+ await fetch(`/capture/${engine}-top-level-nested`,{method:'POST',headers:{'content-type':'application/json'},body:JSON.stringify(result)});
+};
+</script>

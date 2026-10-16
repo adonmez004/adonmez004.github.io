@@ -1,0 +1,28 @@
+// The quick view (v0.2: the picker is a hover tool whose page click opens its own box; the v0.1 multi-pick with hues is gone): the hover probe, a click opens #view-quick on that element, a second element swaps it, disarming closes the box
+import { chromium } from "playwright";
+const LOCAL = (process.env.INSPECTOR || new URL("../inspector.js", import.meta.url).pathname);
+const browser = await chromium.launch();
+const errors = [];
+const ctx = await browser.newContext({ viewport: { width: 1280, height: 900 } });
+const page = await ctx.newPage();
+page.on("console", (m) => { if (m.type() === "error" && !/favicon/.test(m.text())) errors.push(m.text()); });
+page.on("pageerror", (e) => errors.push(e.message));
+await page.route("https://demo.frontendmentorsolutions.io/inspector.js", (r) => r.fulfill({ path: LOCAL, contentType: "text/javascript" }));
+await page.goto("https://demo.frontendmentorsolutions.io/qr-code-component/", { waitUntil: "networkidle" });
+const host = page.locator("fm-inspector");
+const st = () => page.evaluate(() => { const h = document.querySelector("fm-inspector"), r = h.shadowRoot; return { picking: r.querySelector(".pickbtn").getAttribute("aria-pressed"), open: h.hasAttribute("open"), view: h.view, probes: r.querySelectorAll(".ov .probe").length, bands: r.querySelectorAll(".ov .pd, .ov .mr").length, name: r.querySelector("#view-quick .qname")?.textContent.trim() || null, lines: [...r.querySelectorAll("#view-quick .lim")].map((n) => n.textContent.trim().split(" ")[0]), scopeBtns: r.querySelector(".vscope").hidden }; });
+await host.locator(".pickbtn").click(); await page.waitForTimeout(200);
+console.log("armed:", JSON.stringify(await st()));
+const p = await page.locator("p").boundingBox(), h1 = await page.locator("h1").boundingBox();
+await page.mouse.move(p.x + 10, p.y + 10); await page.waitForTimeout(150);
+console.log("hover p:", JSON.stringify(await st()));
+await page.mouse.click(p.x + 10, p.y + 10); await page.waitForTimeout(400);
+console.log("click p:", JSON.stringify(await st()));
+await page.screenshot({ path: "picker2-p.png" });
+await page.mouse.move(h1.x + 10, h1.y + 10); await page.waitForTimeout(100);
+await page.mouse.click(h1.x + 10, h1.y + 10); await page.waitForTimeout(400);
+console.log("click h1:", JSON.stringify(await st()));
+await host.locator(".pickbtn").click(); await page.waitForTimeout(200);
+console.log("disarm:", JSON.stringify(await st()), "(expect picking false, box closed)");
+console.log("errors:", errors);
+await browser.close();

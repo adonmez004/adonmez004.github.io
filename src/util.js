@@ -29,6 +29,25 @@ export function sides(prop, cs = { writingMode: "horizontal-tb", direction: "ltr
 }
 export const SIZE = /^(min-|max-)?(inline-size|block-size|width|height)$/;
 
+export function rich(parts) {
+  // Reason parts as nodes: a plain string as text, { p } a property, { v } a value, { e } an element name, each in its own colour
+  const f = document.createDocumentFragment();
+  for (const part of parts) f.append(typeof part === "string" ? part : span(part.p ? "rp" : part.v ? "rv" : "re", part.p ?? part.v ?? part.e));
+  return f;
+}
+
+export function sizeRows(entry, head = true, kin = "") {
+  // A size ladder entry as rows: `name W × Hpx` (head, with its kinship to the element when given: parent, grandparent, …), then `width Wpx: <why>` and `height Hpx: <why>`
+  const rows = [];
+  if (head) { const n = document.createElement("div"); n.className = "lim lhead"; n.append(span("re", entry.name), ` ${fmt(entry.w)} × ${fmt(entry.h)}px`); if (kin) n.append(span("lkin", kin)); rows.push(n); }
+  for (const [word, size, why] of [["width", entry.w, entry.width], ["height", entry.h, entry.height]]) {
+    const n = document.createElement("div"); n.className = "lim";
+    n.append(span("rp", word), " ", span("rv", fmt(size) + "px"), ": ", rich(why));
+    rows.push(n);
+  }
+  return rows;
+}
+
 export function span(cls, text) {
   const s = document.createElement("span");
   s.className = cls;

@@ -1,0 +1,21 @@
+import { launch, routeInspector, serve } from "../lib/browser.mjs";
+const rules = Array.from({ length: 300 }, (_, i) => `.c${i} { padding: ${i % 7}px; margin: ${i % 5}px; color: rgb(${i % 255}, 0, 0); }`).join("\n");
+const items = Array.from({ length: 3000 }, (_, i) => `<div class="c${i % 300} item"><span>item ${i}</span></div>`).join("");
+const html = `<!doctype html><html><head><meta charset="utf-8"><style>${rules}\n.item { display: inline-block; width: 60px; height: 20px; }</style></head><body><main>${items}</main><script defer src="https://demo.frontendmentorsolutions.io/inspector.js"></script></body></html>`;
+const site = serve(html); const browser = await launch(); const page = await browser.newPage({ viewport: { width: 1280, height: 900 } });
+await routeInspector(page); await page.goto(site.url, { waitUntil: "networkidle" });
+const host = page.locator("fm-inspector"); await host.locator(".fab").click(); await page.evaluate(() => document.querySelector("fm-inspector").load());
+const r = await page.evaluate(async () => {
+  const i = document.querySelector("fm-inspector"), out = {};
+  let t = performance.now(); i.loadHtml(); out.loadHtml = performance.now() - t;
+  t = performance.now(); await i.store.load(); out.storeLoad = performance.now() - t;
+  t = performance.now(); i.measuring = true; const marks = i.marks(); out.marks = performance.now() - t; out.markCount = marks.length;
+  t = performance.now(); for (const m of marks) i.painter.geometry(m.el); out.geometry = performance.now() - t;
+  t = performance.now(); i.draw(); out.draw = performance.now() - t;
+  t = performance.now(); i.draw(); out.draw2 = performance.now() - t;
+  i.measuring = false;
+  t = performance.now(); i.draw(); out.drawOff = performance.now() - t;
+  return out;
+});
+console.log(JSON.stringify(r, null, 1));
+await browser.close(); site.close();

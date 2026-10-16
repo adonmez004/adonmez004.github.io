@@ -8,6 +8,8 @@ export class HtmlView {
   constructor(ui) {
     this.ui = ui;
     this.rows = new Map(); // element -> its HTML row
+    this.scope = null; // the lens's chosen element: the view shows its subtree alone; null = the whole body
+    this.around = null; // under a scope, the element in its context: "parent" (the parent's tag around it and its siblings, folded), "siblings" (the parent's children side by side, the others folded, no parent tag), "children" (its own children, each folded)
   }
 
   setPickedRow(row, on) {
@@ -20,10 +22,20 @@ export class HtmlView {
     const folds = new Set([...this.rows].filter(([, row]) => row.hasAttribute("data-folded")).map(([el]) => el));
     const focused = this.ui.activeElement()?.closest(".row")?.pageElement;
     this.rows = new Map();
+    this.ui.view.replaceChildren(); // the old rows go first: the build's own layout reads (rendered() per element) would otherwise lay the stale rows out again, seconds on a big page
     const fragment = document.createDocumentFragment();
-    this.tree(fragment, document.body, 0);
+    const scope = this.scope?.isConnected ? this.scope : null, parent = scope?.parentElement;
+    const around = scope ? (this.around === "children" || parent ? this.around : null) : null;
+    if (around === "content") fragment.append(this.contentBlock(scope)); // what the element holds, by kind: an image, a link, text, the media and links inside it
+    else if (around === "children" && ![...scope.children].some((c) => !skip(c))) fragment.append(this.note(`${name(scope)} has no child elements.`)); // nothing to list: said, not the element again
+    else if (around === "parent") this.tree(fragment, parent, 0); // the parent's tag around all its children, the others folded
+    else if (around === "siblings") this.forest(fragment, parent, 0); // the parent's children side by side, the parent's own tag left out
+    else this.tree(fragment, scope || document.body, 0);
     this.ui.view.replaceChildren(fragment);
     for (const el of folds) { const row = this.rows.get(el); if (row) this.setFolded(row, true); }
+    if (around === "siblings" || around === "parent") for (const c of parent.children) { const r = this.rows.get(c); if (c !== scope && r?.close) this.setFolded(r, true); } // the others one line each
+    if (around === "children") for (const c of scope.children) { const r = this.rows.get(c); if (r?.close) this.setFolded(r, true); }
+    if (scope) { const root = this.rows.get(scope); if (root) { root.dataset.scope = "true"; if (root.tx && root.hasAttribute("data-folded")) this.setFolded(root, false); } } // the chosen element's own text reads whole, its row marked
     this.ui.prune();
     for (const [el, pick] of this.ui.picks) {
       pick.row = this.rows.get(el); if (!pick.row) continue;
@@ -59,12 +71,62 @@ export class HtmlView {
       return;
     }
     select.append(span("fold c", "…"), span("fold tag", `</${el.localName}>`));
-    for (const n of kids) {
-      if (n.nodeType === 1) this.tree(out, n, depth + 1);
-      else { const child = this.row(depth + 1); child.append(span(n.nodeType === 8 ? "c" : "tx", n.nodeType === 8 ? `<!--${n.data}-->` : squash(n.data))); out.append(child); }
-    }
-    const close = this.row(depth); close.classList.add("cl"); close.append(span("tag", `</${el.localName}>`));
+    this.forest(out, el, depth + 1, kids);
+    const close = this.row(depth); close.classList.add("cl", "nc"); close.append(span("tag", `</${el.localName}>`));
     out.append(close); row.close = close;
+  }
+
+  forest(out, el, depth, kids = [...el.childNodes].filter((n) => !skip(n))) {
+    // The element's children as rows at one depth, the element's own tags not drawn
+    for (const n of kids) {
+      if (n.nodeType === 1) this.tree(out, n, depth);
+      else { const child = this.row(depth); child.classList.add("nc"); child.append(span(n.nodeType === 8 ? "c" : "tx", n.nodeType === 8 ? `<!--${n.data}-->` : squash(n.data))); out.append(child); }
+    }
+  }
+
+  contentBlock(el) {
+    // The element's content by kind (Show Content): an image is shown with its source, alt and natural size; a link with its address and text; media with
+    // its source; a field with its value; anything else with its text, then the images and links inside it
+    const box = document.createElement("div"); box.className = "hc";
+    const row = (label, value, href) => {
+      const r = document.createElement("div"); r.className = "hcr";
+      r.append(span("hcl", label));
+      if (href) { const a = document.createElement("a"); a.href = href; a.target = "_blank"; a.rel = "noopener noreferrer"; a.textContent = value; r.append(a); }
+      else r.append(span("hcv", value));
+      box.append(r);
+    };
+    const text = (n) => squash(n.textContent || "").trim();
+    const tag = el.localName;
+    const head = document.createElement("div"); head.className = "hch"; head.append(span("re", name(el))); box.append(head);
+    if (tag === "img") {
+      const pic = document.createElement("img"); pic.src = el.currentSrc || el.src; pic.alt = ""; pic.className = "hcpic"; box.append(pic);
+      row("image", el.currentSrc || el.getAttribute("src") || "", el.currentSrc || el.src);
+      row("alt", el.alt || "(none)");
+      if (el.naturalWidth) row("natural", `${el.naturalWidth} × ${el.naturalHeight}px`);
+    } else if (tag === "a") {
+      row("link", el.getAttribute("href") || "(no href)", el.href);
+      row("text", text(el) || "(empty)");
+    } else if (/^(video|audio|iframe|source|embed|object)$/.test(tag)) {
+      row(tag, el.currentSrc || el.src || el.data || el.getAttribute("src") || "(no source)", el.currentSrc || el.src || el.data);
+    } else if (/^(input|textarea|select)$/.test(tag)) {
+      row("value", el.value || "(empty)");
+      if (el.placeholder) row("placeholder", el.placeholder);
+    } else if (tag === "svg") {
+      const pic = el.cloneNode(true); pic.classList.add("hcpic"); pic.removeAttribute("id"); box.append(pic);
+      row("vector", `${el.children.length} shapes`);
+    } else {
+      row("text", text(el) || "(no text)");
+      for (const i of el.querySelectorAll("img")) row("image", i.getAttribute("src") || "", i.src);
+      for (const a of el.querySelectorAll("a[href]")) row("link", `${text(a) || a.getAttribute("href")}`, a.href);
+    }
+    return box;
+  }
+
+  note(text) {
+    const n = document.createElement("div");
+    n.className = "empty";
+    n.textContent = text;
+    return n;
   }
 
   row(depth) {

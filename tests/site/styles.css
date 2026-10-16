@@ -1,0 +1,9 @@
+/* top comment */
+.card { container-type: inline-size; padding: 10px; margin: 4px; margin-left: 20px; color: red; color: blue; }
+.card {
+  & .btn { background: rgb(10, 20, 30); }
+  .title { font-size: 30px; }
+}
+@media (min-width: 5000px) { .title { color: rgb(5, 5, 5); } }
+@container (min-width: 1px) { .btn { padding: 3px; } }
+@layer base { .note { font-weight: 700; } }

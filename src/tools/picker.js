@@ -1,6 +1,6 @@
-// The picker: an element chosen on the page itself (or by its HTML row). A pick lights its row and the rules that select it; the picks stay
+// The picker, the rail's Quick view: an element hovered on the page (its box painted) or picked by its HTML row. A pick lights its row and the rules that select it; the picks stay
 // until the tool ends or Reset. Alt while picking measures the gap to the hovered element. It reaches the panel through `ui` alone:
-// host (the element: its picking attribute), btn, tools, rows() (the HTML rows), loadHtml(), setPickedRow(row, on), openCssFor(el), markHits(), paint()
+// host (the element: its picking attribute), btn, tools, rows() (the HTML rows), loadHtml(), setPickedRow(row, on), openCssFor(el), markHits(), paint(), quick(on) (its box)
 import { PALETTE } from "../util.js";
 
 export class Picker {
@@ -12,24 +12,32 @@ export class Picker {
     this.probe = null; // the element under the pointer while picking
     this.alt = false; // Alt held while picking: the probe measures its distance from the last pick
     ui.tools.register("picking", {
-      label: "Select an element · Esc to cancel",
+      label: "Quick view · hover an element · Esc to cancel",
       handlers: () => ({
         move: (target, event) => {
           this.alt = event.altKey;
           if (target !== this.probe || this.alt !== this.altWas) { this.probe = target; this.altWas = this.alt; ui.paint(); }
         },
-        leave: () => { if (this.probe) { this.probe = null; ui.paint(); } },
-        click: (target) => this.select(target),
+        leave: () => this.setProbe(null),
+        click: (target) => ui.quick(true, target), // a click opens the quick view's box on that element; the hover keeps painting
         escape: () => { this.setPicking(false); ui.btn.focus(); },
         key: (event) => { if (event.key === "Alt" && this.alt !== (event.type === "keydown")) { this.alt = event.type === "keydown"; ui.paint(); } },
       }),
-      arm: () => {
-        // A page-wide crosshair says the next click picks; the inspector keeps its own cursors
-        this.cursorStyle ||= Object.assign(document.createElement("style"), { textContent: "html, html *:not(fm-inspector) { cursor: crosshair !important; }" });
-        document.head.append(this.cursorStyle);
-      },
-      release: () => { this.cursorStyle?.remove(); this.probe = null; },
+      arm: () => this.crosshair(true),
+      release: () => { this.crosshair(false); this.probe = null; },
     });
+  }
+
+  crosshair(on) {
+    // A page-wide crosshair says the next click chooses; the inspector keeps its own cursors. The lens shares it
+    this.cursorStyle ||= Object.assign(document.createElement("style"), { textContent: "html, html *:not(fm-inspector) { cursor: crosshair !important; }" });
+    if (on) document.head.append(this.cursorStyle); else this.cursorStyle.remove();
+  }
+
+  setProbe(el) {
+    // The element under the pointer, painted as a probe (the lens shares it with the picker)
+    if (el === this.probe) return;
+    this.probe = el; this.ui.paint();
   }
 
   setPicking(on) {
@@ -40,8 +48,9 @@ export class Picker {
     if (on) this.ui.tools.arm("picking");
     else {
       this.alt = false;
-      this.clear(); // like the ruler: what the picker marked goes when it closes; the resize tool's state stands
+      this.clear(); // what the picker marked goes when it closes
       this.ui.tools.end("picking");
+      this.ui.quick(false);
     }
   }
 

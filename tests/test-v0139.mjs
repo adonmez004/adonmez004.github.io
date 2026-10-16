@@ -1,0 +1,24 @@
+// The quick view's lifecycle (v0.1.39 checked the old picker's picks): arming shows the state pill, a page click opens the quick box on that element, a second press on the icon ends it and closes the box, Escape ends it, closing the box leaves the tool armed, the ruler turns it off (one tool at a time)
+import { chromium } from "playwright";
+import http from "node:http"; import fs from "node:fs"; import path from "node:path";
+const ROOT = new URL("./site/", import.meta.url).pathname, LOCAL = (process.env.INSPECTOR || new URL("../inspector.js", import.meta.url).pathname);
+const srv = http.createServer((q, r) => { const f = q.url === "/inspector.js" ? LOCAL : path.join(ROOT, q.url === "/" ? "index.html" : q.url); try { r.setHeader("content-type", f.endsWith(".css") ? "text/css" : f.endsWith(".js") ? "text/javascript" : "text/html"); r.end(fs.readFileSync(f)); } catch { r.statusCode = 404; r.end(); } }).listen(0);
+const port = srv.address().port;
+const browser = await chromium.launch();
+const errors = [];
+const page = await browser.newPage({ viewport: { width: 1280, height: 900 } }); page.on("pageerror", (e) => errors.push(e.message));
+await page.goto(`http://127.0.0.1:${port}/`, { waitUntil: "networkidle" });
+const host = page.locator("fm-inspector");
+const sr = (fn, arg) => page.evaluate(fn, arg);
+const st = () => sr(() => { const h = document.querySelector("fm-inspector"), sh = h.shadowRoot; return { open: h.hasAttribute("open"), view: h.view, picking: h.hasAttribute("picking"), quick: h.quickEl?.className || null, pill: getComputedStyle(sh.querySelector(".state")).display !== "none", boxes: sh.querySelectorAll(".ov .box").length, measuring: h.hasAttribute("measuring") }; });
+const clickOn = async (sel) => { const [x, y] = await sr((s) => { const r = document.querySelector(s).getBoundingClientRect(); return [r.x + 5, r.y + 5]; }, sel); await page.mouse.click(x, y); await page.waitForTimeout(300); };
+await host.locator(".pickbtn").click(); await page.waitForTimeout(150); console.log("armed:", JSON.stringify(await st()), "(expect picking, pill, box closed)");
+await clickOn(".btn"); console.log("click on .btn:", JSON.stringify(await st()), "(expect open, view quick, quick btn)");
+await clickOn(".title"); console.log("click on .title:", JSON.stringify(await st()), "(expect quick title)");
+await host.locator(".pickbtn").click(); await page.waitForTimeout(150); console.log("second press on the icon:", JSON.stringify(await st()), "(expect picking false, box closed)");
+await host.locator(".pickbtn").click(); await page.waitForTimeout(150); await clickOn(".btn"); await page.keyboard.press("Escape"); await page.waitForTimeout(150); console.log("Escape:", JSON.stringify(await st()), "(expect picking false, box closed)");
+await host.locator(".pickbtn").click(); await page.waitForTimeout(150); await clickOn(".btn"); await host.locator("#panel .close").click(); await page.waitForTimeout(150); console.log("box closed while armed:", JSON.stringify(await st()), "(expect picking true, box closed)");
+await clickOn(".title"); console.log("next click reopens:", JSON.stringify(await st()), "(expect open, quick title)");
+await host.locator(".measure").click(); await page.waitForTimeout(200); console.log("ruler on:", JSON.stringify(await st()), "(expect picking false, measuring true, box closed)");
+console.log("errors:", JSON.stringify(errors));
+await browser.close(); srv.close();

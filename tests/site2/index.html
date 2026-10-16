@@ -1,0 +1,22 @@
+<!doctype html><html lang="en"><head><meta charset="utf-8"><title>b</title>
+<style>
+.wrap { width: 600px; }
+.maxed { max-width: 320px; background: #ddd; height: 40px; }
+.minned { min-width: 200px; width: 50px; background: #ccc; height: 40px; }
+.locked { width: 150px !important; background: #bbb; height: 40px; }
+.inl { display: inline; background: #aaa; }
+.flexp { display: flex; width: 400px; }
+.flexp .kid { flex: 1 1 0; background: #999; height: 40px; }
+.gridp { display: grid; grid-template-columns: 100px 100px; }
+.gridp .cell { background: #888; height: 40px; }
+.free { width: 100px; height: 40px; background: #777; }
+</style></head><body>
+<div class="wrap">
+<div class="maxed">max</div><div class="minned">min</div><div class="locked">locked</div>
+<p><span class="inl">inline</span></p>
+<div class="flexp"><div class="kid">a</div><div class="kid">b</div></div>
+<div class="gridp"><div class="cell">c1</div><div class="cell">c2</div></div>
+<div class="free">free</div>
+</div>
+<script src="/inspector.js" defer></script>
+</body></html>

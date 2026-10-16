@@ -167,14 +167,19 @@ export class CssStore {
 
   cssModel(owner, head, sourceDecls, meta) {
     let model = this.modelOf.get(owner);
-    if (!model || (!this.dirtyModels.has(model) && !this.ui.keep(model))) { // a pinned, hovered, edited or undo-referenced model survives the rebuild
-      const rule = meta.inlineEl ? { style: owner.style, selectorText: "element.style" } : owner;
+    const rule = meta.inlineEl ? { style: owner.style, selectorText: "element.style" } : owner;
+    let decls = sourceDecls || [], accepted = false;
+    if (decls.length) {
+      // the source still describes the live rule: its lines (comments and blank lines included) are the rows
+      const text = decls.filter((d) => d.type === "decl").map((d) => `${d.prop}: ${d.value}${d.important ? " !important" : ""};`).join("\n");
+      try { accepted = this.scratch({ head }, text).cssText === rule.style.cssText; } catch { accepted = false; }
+    }
+    // A clean model nothing points at (no pin, hover, edit or undo step) is rebuilt from the source when the source still matches the live rule, so the
+    // comments come back once the sources are fetched. A rule the page has changed keeps its model and reconciles instead: a rebuild from the CSSOM
+    // alone would lose the lines the CSSOM collapses (`color: red !important; color: blue;` reads back as the red alone)
+    if (model && !this.dirtyModels.has(model) && !this.ui.keep(model) && accepted) model = null;
+    if (!model) {
       model = { rule, head, ...meta, baseline: rule.style.cssText, originalAttribute: meta.inlineEl?.getAttribute("style") ?? null };
-      let decls = sourceDecls || [], accepted = false;
-      if (decls.length) {
-        const text = decls.filter((d) => d.type === "decl").map((d) => `${d.prop}: ${d.value}${d.important ? " !important" : ""};`).join("\n");
-        try { accepted = this.scratch(model, text).cssText === model.baseline; } catch { accepted = false; }
-      }
       if (!accepted) decls = parseDecls(rule.style.cssText, 0, rule.style.cssText.length);
       if (!decls.some((d) => d.type === "decl")) decls = [...rule.style].map((prop) => ({ type: "decl", prop, value: rule.style.getPropertyValue(prop), important: rule.style.getPropertyPriority(prop) === "important", on: true }));
       model.nativeFallback = !!sourceDecls && !accepted;
@@ -265,9 +270,16 @@ export class CssStore {
     // Preserve changes made by the page since our last write, including deletions.
     if (live === model.lastApplied) return;
     const baseline = this.scratch(model, model.baseline);
-    for (const { prop, value, priority } of this.styleChanges(this.scratch(model, model.lastApplied), this.scratch(model, live))) {
-      this.writeProperty(baseline, prop, value, priority);
+    const pending = new Map(this.styleChanges(this.scratch(model, model.lastApplied), this.scratch(model, live)).map((change) => [change.prop, change]));
+    // A declaration the page wrote as a shorthand lands as that shorthand when every longhand it sets changed (WebKit serializes longhands set one by one in another form)
+    for (const entry of parseDecls(live, 0, live.length)) {
+      if (entry.type !== "decl") continue;
+      const covers = [...this.scratch(model, `${entry.prop}: ${entry.value}`)];
+      if (covers.length < 2 || !covers.every((prop) => pending.has(prop))) continue;
+      this.writeProperty(baseline, entry.prop, entry.value, entry.important ? "important" : "");
+      for (const prop of covers) pending.delete(prop);
     }
+    for (const { prop, value, priority } of pending.values()) this.writeProperty(baseline, prop, value, priority);
     model.baseline = baseline.cssText;
     if (model.inlineEl) model.originalAttribute = !model.inlineEl.hasAttribute("style") && !model.baseline ? null : model.baseline;
   }
@@ -282,26 +294,57 @@ export class CssStore {
     const old = model.decls.filter((d) => d.type === "decl"), used = new Set();
     const baseline = this.scratch(model, model.baseline);
     // A live entry takes the old declaration that carries its value when there are several of the property (the fallback chain's edited line keeps its identity), else the first
-    const norm = (d) => { const s = this.scratch(model, `${d.prop}: ${d.value}${d.important ? " !important" : ""}`); return `${s.getPropertyValue(d.prop)}${s.getPropertyPriority(d.prop) ? " !important" : ""}`; };
+    const norm = (d) => this.normValue(model, d);
     model.decls = parseDecls(live, 0, live.length).map((entry) => {
       if (entry.type !== "decl") return entry;
       const same = old.filter((candidate) => candidate.prop === entry.prop && candidate.on && !used.has(candidate));
-      const d = (same.length > 1 && same.find((candidate) => norm(candidate) === norm(entry))) || same[0] || { model, rule: model.rule };
+      // several lines of the property: the one carrying the live value, else the one the cascade let win (the last of the entry's priority, else the last)
+      const winner = same.length > 1 ? same.find((candidate) => norm(candidate) === norm(entry)) || [...same].reverse().find((candidate) => !!candidate.important === !!entry.important) || same.at(-1) : same[0];
+      const d = winner || { model, rule: model.rule };
       used.add(d);
-      Object.assign(d, entry, { orig: baseline.getPropertyValue(entry.prop), live: true, on: true });
+      // a line whose value did not change keeps its own orig (a fallback line of a chain must not take the chain's winning value); a changed one takes the baseline's
+      const orig = d.orig != null && norm(d) === norm(entry) ? d.orig : baseline.getPropertyValue(entry.prop);
+      Object.assign(d, entry, { orig, live: true, on: true });
       return d;
     });
     // Disabled declarations remain available for re-enabling and Reset.
+    // A live declaration the CSSOM collapsed (`color: red !important; color: blue;` reads back as the red alone) keeps its row: its line stands in the source,
+    // and Reset and the write path replay the whole chain as the sheet would; it sits right after the line that won
     for (const d of old) if (!used.has(d)) {
       if (this.ui.held(d) || !d.on) {
         d.on = false;
-        d.orig = baseline.getPropertyValue(d.prop) || d.orig;
+        if (!old.some((x) => x !== d && x.prop === d.prop)) d.orig = baseline.getPropertyValue(d.prop) || d.orig; // a line of a chain keeps its own
         model.decls.push(d);
+      } else if (model.decls.some((x) => x.type === "decl" && x.prop === d.prop)) {
+        // in the source's order: before the first kept line of the property that followed it, else after the last one
+        const next = model.decls.findIndex((x) => x.type === "decl" && x.prop === d.prop && old.indexOf(x) > old.indexOf(d));
+        const at = next >= 0 ? next : model.decls.length - 1 - [...model.decls].reverse().findIndex((x) => x.type === "decl" && x.prop === d.prop) + 1;
+        model.decls.splice(at, 0, d);
       } else this.ui.dropped(d);
     }
+    this.settleChains(model);
     model.nativeFallback = true;
     model.sourceText = live;
     model.lastApplied = live;
+  }
+
+  normValue(model, d) {
+    // A declaration's value and priority as the browser serializes them, for comparing a source line with a live entry
+    const s = this.scratch(model, `${d.prop}: ${d.value}${d.important ? " !important" : ""}`);
+    return `${s.getPropertyValue(d.prop)}${s.getPropertyPriority(d.prop) ? " !important" : ""}`;
+  }
+
+  settleChains(model) {
+    // The rows must add up to the live rule. A kept line of a chain that would beat the page's own value (an important line the page replaced
+    // with a normal one) goes off: it stays as a row, struck, the user can turn it back on; the line carrying the live value stays on
+    const live = model.rule.style, effective = this.scratch(model, this.declarationText(model));
+    for (const prop of new Set(model.decls.filter((d) => d.type === "decl" && d.on).map((d) => d.prop))) {
+      if (effective.getPropertyValue(prop) === live.getPropertyValue(prop) && effective.getPropertyPriority(prop) === live.getPropertyPriority(prop)) continue;
+      const lines = model.decls.filter((d) => d.type === "decl" && d.on && d.prop === prop);
+      const liveValue = `${live.getPropertyValue(prop)}${live.getPropertyPriority(prop) ? " !important" : ""}`;
+      const winner = lines.find((d) => this.normValue(model, d) === liveValue) || null;
+      for (const d of lines) if (d !== winner) d.on = false;
+    }
   }
 
   validValue(d, value) {

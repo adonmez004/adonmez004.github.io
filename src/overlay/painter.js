@@ -1,6 +1,6 @@
 // The overlay's drawing primitives: boxes, bands, labels and chips placed in the viewport without covering a control or each other.
 // It knows the overlay element alone: callers begin() a frame, open group()s, draw into them and end() it; the labels' spots are resolved at end(),
-// from one layout read for the whole frame.
+// from one layout read for the whole frame. `chrome` is the list of rects the labels must keep off (the rail, the open box).
 import { num, fmt, name, span } from "../util.js";
 
 export class Painter {
@@ -118,9 +118,9 @@ export class Painter {
   }
 
   beside(r, chrome) {
-    // The height line stands outside the right edge when the viewport has room there and the panel is not over it
+    // The height line stands outside the right edge when the viewport has room there and no chrome (the rail, the open box) is over it
     if (innerWidth - r.right < 90) return false;
-    return !(r.right + 10 < chrome.right && r.right + 90 > chrome.left && r.top < chrome.bottom && r.bottom > chrome.top);
+    return !chrome.some((c) => r.right + 10 < c.right && r.right + 90 > c.left && r.top < c.bottom && r.bottom > c.top);
   }
 
   resolve() {
@@ -144,7 +144,7 @@ export class Painter {
       if (dx) label.style.left = `${num(label.style.left) + dx}px`;
       if (dy) label.style.top = `${num(label.style.top) + dy}px`;
     };
-    const free = (label, chrome) => { const b = rectOf(label); return !hits(b, chrome) && !this.placed.some((p) => hits(b, p)); };
+    const free = (label, chrome) => { const b = rectOf(label); return !chrome.some((c) => hits(b, c)) && !this.placed.some((p) => hits(b, p)); };
     for (const item of this.pending) {
       const { label } = item;
       if (!label.isConnected) continue;

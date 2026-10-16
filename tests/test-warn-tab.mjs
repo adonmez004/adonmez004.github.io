@@ -1,0 +1,25 @@
+// A drag held by a rule, mid-drag and released: the reason reads in the resize tool's own box (the size view, the declaration with its tick), the box never flips to the CSS view; the Go to this element door opens the second box with the red row in view (v0.2: no tab to warn on)
+import { chromium } from "playwright";
+import http from "node:http"; import fs from "node:fs"; import path from "node:path";
+const ROOT = new URL("./site2/", import.meta.url).pathname, LOCAL = (process.env.INSPECTOR || new URL("../inspector.js", import.meta.url).pathname);
+const srv = http.createServer((q, r) => { const f = q.url === "/inspector.js" ? LOCAL : path.join(ROOT, q.url === "/" ? "index.html" : q.url); try { r.setHeader("content-type", f.endsWith(".js") ? "text/javascript" : "text/html"); r.end(fs.readFileSync(f)); } catch { r.statusCode = 404; r.end(); } }).listen(0);
+const port = srv.address().port;
+const browser = await chromium.launch();
+const errors = [];
+const page = await browser.newPage({ viewport: { width: 1280, height: 900 } }); page.on("pageerror", (e) => errors.push(e.message));
+await page.goto(`http://127.0.0.1:${port}/`, { waitUntil: "networkidle" });
+const host = page.locator("fm-inspector");
+const st = () => page.evaluate(() => { const h = document.querySelector("fm-inspector"), sh = h.shadowRoot; const w = sh.querySelector(".wblock"); const row = sh.querySelector("#view-css .d.block"); const p2 = sh.querySelector("#panel2"); const rr = row?.getBoundingClientRect(), pr = p2.getBoundingClientRect(); return { open: h.hasAttribute("open"), view: h.view, warn: [...w.childNodes].filter((n) => !n.classList?.contains("wgo")).map((n) => n.textContent).join("").trim(), tick: w.querySelector("input")?.checked ?? null, door: !!w.querySelector(".wgo"), second: !p2.hidden, redRowInSecond: !!rr && !p2.hidden && rr.top >= pr.top && rr.bottom <= pr.bottom, row: row?.textContent.trim().replace(/\s+/g, " ") }; });
+await host.locator(".sizebtn").click();
+const [x, y] = await page.evaluate(() => { const r = document.querySelector(".maxed").getBoundingClientRect(); return [r.x + 2, r.y + 2]; }); await page.mouse.click(x, y); await page.waitForTimeout(300);
+console.log("chosen:", JSON.stringify(await st()), "(expect open, view size)");
+const b = await host.locator(".hd").boundingBox(); await page.mouse.move(b.x + 8, b.y + 8); await page.mouse.down(); await page.mouse.move(b.x + 60, b.y + 8); await page.mouse.move(b.x + 120, b.y + 8); await page.waitForTimeout(250);
+console.log("mid-drag past the max:", JSON.stringify(await st()), "(expect view size, the max-width declaration with its tick, a door)");
+await page.mouse.up(); await page.waitForTimeout(250);
+console.log("released:", JSON.stringify(await st()));
+await host.locator(".wgo").click(); await page.waitForTimeout(400);
+console.log("door:", JSON.stringify(await st()), "(expect second true, the red row in the second box, the first box still on size)");
+await page.keyboard.press("Escape"); await page.waitForTimeout(200);
+console.log("Escape closes the second alone:", JSON.stringify(await st()), "(expect second false, open true, view size)");
+console.log("errors:", JSON.stringify(errors));
+await browser.close(); srv.close();

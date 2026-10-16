@@ -1,0 +1,16 @@
+import { launch, routeInspector, blockFonts, serve } from "../lib/browser.mjs";
+const site = serve(); const browser = await launch();
+const page = await browser.newPage({ viewport: { width: 1280, height: 900 }, deviceScaleFactor: 2 }); const errors = []; page.on("pageerror", (e) => errors.push(e.message));
+await routeInspector(page); await blockFonts(page); await page.goto(site.url, { waitUntil: "networkidle" });
+const host = page.locator("fm-inspector"); const sr = (fn, a) => page.evaluate(fn, a);
+const st = () => sr(() => { const i = document.querySelector("fm-inspector"), sh = i.shadowRoot; const sel = sh.querySelector(".vmode"); return { view: i.view, mode: sel.value, scopeOpt: sel.querySelector('[value="scope"]').disabled ? "disabled" : "ok", defaults: sh.querySelector(".vdefaults").hidden ? "hidden" : sh.querySelector(".vdefaults").getAttribute("aria-pressed") + (sh.querySelector(".vdefaults").disabled ? "(disabled)" : ""), rail: [...sh.querySelectorAll(".rail button")].map((b) => b.className).join(" "), cssHeads: [...sh.querySelectorAll("#view-css .gh .sel, #view-css .cm")].map((s) => s.textContent).join(" | "), naRows: sh.querySelectorAll("#view-css .d.na").length }; });
+const at = async (sel) => { const b = await page.locator(sel).boundingBox(); return [b.x + 10, b.y + 8]; };
+console.log("rail:", (await st()).rail);
+await host.locator(".htmlbtn").click(); let [x, y] = await at("h1"); await page.mouse.click(x, y); await page.waitForTimeout(400); console.log("html h1:", JSON.stringify(await st()));
+await host.locator(".vmode").selectOption("all"); await page.waitForTimeout(300); console.log("all elements:", JSON.stringify((await st()).mode), "rows", await sr(() => document.querySelector("fm-inspector").shadowRoot.querySelectorAll("#view-html .row").length));
+await host.locator(".cssbtn").click(); [x, y] = await at("h1"); await page.mouse.click(x, y); await page.waitForTimeout(400); console.log("css h1:", JSON.stringify(await st()));
+await host.locator(".vdefaults").click(); await page.waitForTimeout(300); console.log("defaults on:", JSON.stringify(await st()));
+await page.screenshot({ path: "defaults-css.png" });
+await host.locator(".vmode").selectOption("all"); await page.waitForTimeout(300); console.log("all elements (css):", JSON.stringify(await st()));
+await host.locator(".vmode").selectOption("scope"); await page.waitForTimeout(300); console.log("back to selected:", JSON.stringify((await st()).cssHeads));
+console.log("errors:", errors); await browser.close(); site.close();

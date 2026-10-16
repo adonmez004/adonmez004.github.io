@@ -1,0 +1,15 @@
+import { launch, routeInspector, serve } from "../lib/browser.mjs";
+const site = serve(); const browser = await launch();
+const ctx = await browser.newContext({ viewport: { width: 390, height: 844 }, hasTouch: true, isMobile: true });
+const page = await ctx.newPage(); await routeInspector(page); await page.goto(site.url, { waitUntil: "networkidle" });
+const host = page.locator("fm-inspector"); const cdp = await ctx.newCDPSession(page);
+const touch = (type, x, y) => cdp.send("Input.dispatchTouchEvent", { type, touchPoints: type === "touchEnd" ? [] : [{ x, y }] });
+await page.touchscreen.tap(195, 800); await page.waitForTimeout(500);
+await page.evaluate(() => { const i = document.querySelector("fm-inspector"); window.__ev = []; for (const t of ["pointerdown", "pointerup", "click"]) i.shadowRoot.querySelector(".head").addEventListener(t, (e) => window.__ev.push(`${t}@${Math.round(performance.now())} ${e.target.className} ${e.pointerType || ""}`)); });
+const b = await host.locator(".spacer").boundingBox(); const x = b.x + b.width / 2, y = b.y + b.height / 2;
+console.log("spacer at", Math.round(x), Math.round(y), "head h", (await host.locator(".head").boundingBox()).height);
+await touch("touchStart", x, y); await touch("touchEnd", x, y); await page.waitForTimeout(120); await touch("touchStart", x, y); await touch("touchEnd", x, y); await page.waitForTimeout(500);
+console.log("CDP taps:", await page.evaluate(() => window.__ev)); await page.evaluate(() => { window.__ev = []; });
+await page.touchscreen.tap(x, y); await page.waitForTimeout(120); await page.touchscreen.tap(x, y); await page.waitForTimeout(500);
+console.log("touchscreen.tap x2:", await page.evaluate(() => window.__ev), "sheet", await page.evaluate(() => Math.round(document.querySelector("fm-inspector").shadowRoot.querySelector(".panel").getBoundingClientRect().height)));
+await browser.close(); site.close();

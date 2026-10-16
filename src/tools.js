@@ -1,9 +1,11 @@
 // The page-wide tools' arbitration: which tools are OPEN (armed by their buttons) and which ONE is ACTIVE, taking the page's input through the shield.
-// Arming a tool makes it active and keeps the others open; ending the active tool hands the input back to the one armed before it.
+// Arming a tool makes it active; the host's onSwitch turns the others off first, so one tool stands at a time (the stack remains for a tool armed under another).
 // A tool registers { label, handlers(), arm?(), release?() }: handlers() builds the shield's callbacks, arm/release wrap its turn at the input.
 export class Tools {
-  constructor({ pickTarget, isHelper, editing, cancelEdit, say }) {
+  constructor({ pickTarget, isHelper, editing, cancelEdit, say, onSwitch, busy = () => false }) {
+    this.busy = busy; // a gesture of the host's own runs (a head drag, a sheet pull, the handle): the shield leaves its pointer events alone
     this.pickTarget = pickTarget; // the page element under a pointer event, found through the shield
+    this.onSwitch = onSwitch; // called before a tool is armed: the host turns every other tool off, one tool at a time
     this.isHelper = isHelper; // a node that is not the page's own
     this.editing = editing; // an open value edit cancels on Escape before a tool ends
     this.cancelEdit = cancelEdit;
@@ -20,6 +22,7 @@ export class Tools {
 
   arm(id) {
     // The tool takes the input; a tool armed earlier stays open behind it
+    this.onSwitch?.(id);
     this.open = [...this.open.filter((k) => k !== id), id];
     this.activate(id);
   }
@@ -47,6 +50,9 @@ export class Tools {
     const ctrl = new AbortController();
     const options = { capture: true, passive: false, signal: ctrl.signal };
     const onInput = (event) => {
+      // A right click closes everything at once through the host's own capture listener (registered first); the page's menu never opens over an armed tool
+      if (event.type === "contextmenu") { event.preventDefault(); event.stopImmediatePropagation(); return; }
+      if (this.busy()) return; // the host's own gesture owns the pointer: a sheet pull that leaves the sheet, a head drag over the page
       const target = this.pickTarget(event);
       if (!target || this.isHelper(target)) { if (event.type === "pointermove") handlers.leave?.(); return; }
       if (event.cancelable && !event.type.startsWith("touch")) event.preventDefault();

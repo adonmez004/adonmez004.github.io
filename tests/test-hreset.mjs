@@ -1,0 +1,27 @@
+// The handle's Reset: shown once the element is resized, right of the handle (left near the screen edge), puts the element back as one undo step (v0.2: host.sizeUndo()/sizeResetAll() for the gone buttons, the size box's head and size-now line for the bar)
+import { chromium } from "playwright";
+import { openBox } from "./lib/browser.mjs";
+import http from "node:http"; import fs from "node:fs"; import path from "node:path";
+const ROOT = new URL("./site/", import.meta.url).pathname, LOCAL = (process.env.INSPECTOR || new URL("../inspector.js", import.meta.url).pathname);
+const srv = http.createServer((q, r) => { const f = q.url === "/inspector.js" ? LOCAL : path.join(ROOT, q.url === "/" ? "index.html" : q.url); try { r.setHeader("content-type", f.endsWith(".css") ? "text/css" : f.endsWith(".js") ? "text/javascript" : "text/html"); r.end(fs.readFileSync(f)); } catch { r.statusCode = 404; r.end(); } }).listen(0);
+const port = srv.address().port;
+const browser = await chromium.launch();
+const errors = [];
+const page = await browser.newPage({ viewport: { width: 1280, height: 900 } }); page.on("pageerror", (e) => errors.push(e.message));
+await page.goto(`http://127.0.0.1:${port}/`, { waitUntil: "networkidle" });
+const host = page.locator("fm-inspector");
+const sr = (fn, arg) => page.evaluate(fn, arg);
+const st = () => sr(() => { const h = document.querySelector("fm-inspector"), sh = h.shadowRoot; const hd = sh.querySelector(".hd").getBoundingClientRect(), rs = sh.querySelector(".hreset"), rr = rs.getBoundingClientRect(); return { reset: getComputedStyle(rs).display, resetRightOfHandle: rr.left > hd.right, resetInside: rr.right <= innerWidth, btn: Math.round(document.querySelector(".btn").getBoundingClientRect().width), style: document.querySelector(".btn").getAttribute("style"), bar: `${sh.querySelector(".wval").textContent} | ${sh.querySelector(".wnow").textContent}`.trim().replace(/\s+/g, " ") }; });
+const choose = async (sel) => { const [x, y] = await sr((s) => { const r = document.querySelector(s).getBoundingClientRect(); return [r.x + 2, r.y + 2]; }, sel); await page.mouse.click(x, y); await page.waitForTimeout(120); };
+const drag = async (dx, dy) => { const b = await host.locator(".hd").boundingBox(); const x = b.x + b.width / 2, y = b.y + b.height / 2; await page.mouse.move(x, y); await page.mouse.down(); for (let i = 1; i <= 4; i++) await page.mouse.move(x + dx * i / 4, y + dy * i / 4); await page.mouse.up(); await page.waitForTimeout(200); };
+await host.locator(".sizebtn").click(); await page.waitForTimeout(100);
+await choose(".btn"); console.log("chosen, untouched:", JSON.stringify(await st()), "(expect reset none)");
+await drag(40, 0); console.log("resized:", JSON.stringify(await st()), "(expect reset shown right of the handle)");
+await host.locator(".hreset").click(); await page.waitForTimeout(200); console.log("handle Reset:", JSON.stringify(await st()), "(expect 25, style null, reset none)");
+await sr(() => document.querySelector("fm-inspector").sizeUndo()); await page.waitForTimeout(200); console.log("undo the Reset:", JSON.stringify(await st()), "(expect 65, reset shown)");
+await drag(20, 0); console.log("resized on:", (await st()).btn, "(expect 85)");
+await choose(".card"); await drag(-100, 0); console.log("card near the right edge: reset left of the handle:", JSON.stringify((({ resetRightOfHandle, resetInside, reset }) => ({ resetRightOfHandle, resetInside, reset }))(await st())));
+await sr(() => document.querySelector("fm-inspector").sizeResetAll()); await page.waitForTimeout(200); console.log("Reset all sizes:", JSON.stringify(await st()));
+await page.keyboard.press("Escape"); await page.waitForTimeout(100); console.log("after Escape reset hidden:", (await st()).reset);
+console.log("errors:", JSON.stringify(errors));
+await browser.close(); srv.close();

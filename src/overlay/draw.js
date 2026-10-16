@@ -3,9 +3,20 @@
 import { num, fmt, camel, sides, SIZE } from "../util.js";
 import { helper } from "../foreign.js";
 
+export function bands(painter, el, values = true) {
+  // The margin, border and padding bands, with their values where they are non-zero (the ruler's crowd goes without)
+  const { r, p, m, b } = painter.geometry(el);
+  const all = { t: 1, r: 1, b: 1, l: 1 };
+  const pos = { t: Math.max(m.t, 0), r: Math.max(m.r, 0), b: Math.max(m.b, 0), l: Math.max(m.l, 0) };
+  if (pos.t || pos.r || pos.b || pos.l) painter.ring("mr", painter.outer(r, pos), pos, all, values && "mv");
+  if (b.t || b.r || b.b || b.l) painter.ring("bd", r, b, all, values && "bv");
+  const inner = { left: r.left + b.l, top: r.top + b.t, right: r.right - b.r, bottom: r.bottom - b.b, width: r.width - b.l - b.r, height: r.height - b.t - b.b };
+  if (p.t || p.r || p.b || p.l) painter.ring("pd", inner, p, all, values && "pv");
+}
+
 export function paintModel(painter, el, hue, chrome, focus) {
-  // A picked element: its frame, the width and height lines with their sizes, the name chip in its hue;
-  // the last pick also draws the guide lines across the viewport
+  // A picked element: its margin, border and padding bands with their values, its frame, the width and height lines with their sizes,
+  // the name chip in its hue; the last pick also draws the guide lines across the viewport
   const r = painter.geometry(el).r;
   if (el === focus) {
     painter.box("gd v", r.left, 0, 0, innerHeight);
@@ -13,14 +24,16 @@ export function paintModel(painter, el, hue, chrome, focus) {
     painter.box("gd h", 0, r.top, innerWidth, 0);
     painter.box("gd h", 0, r.bottom, innerWidth, 0);
   }
+  bands(painter, el);
   painter.box("box", r.left, r.top, r.width, r.height);
   painter.chip(painter.label("hue", painter.chipParts(el, r, false), 0, 0), r, chrome);
   painter.dims(r, chrome);
 }
 
-export function paintProbe(painter, el, chrome) {
-  // The element under the picker: its frame, the width and height lines with their sizes, the name chip
+export function paintProbe(painter, el, chrome, withBands = false) {
+  // The element under the picker or the lens: its frame, the width and height lines with their sizes, the name chip; the quick view adds the bands
   const r = painter.geometry(el).r;
+  if (withBands) bands(painter, el);
   painter.box("box", r.left, r.top, r.width, r.height);
   painter.chip(painter.label("", painter.chipParts(el, r, false), 0, 0), r, chrome);
   painter.dims(r, chrome);
@@ -28,14 +41,9 @@ export function paintProbe(painter, el, chrome) {
 
 export function paintMeasure(painter, el, chrome) {
   // The ruler: the frame, one DevTools-style chip (name | W × H) and the margin, border and padding bands with their values where they are non-zero;
-  // no measure lines, they drowned the page when every element wore them
-  const { r, p, m, b } = painter.geometry(el);
-  const all = { t: 1, r: 1, b: 1, l: 1 };
-  const pos = { t: Math.max(m.t, 0), r: Math.max(m.r, 0), b: Math.max(m.b, 0), l: Math.max(m.l, 0) };
-  if (pos.t || pos.r || pos.b || pos.l) painter.ring("mr", painter.outer(r, pos), pos, all, "mv");
-  if (b.t || b.r || b.b || b.l) painter.ring("bd", r, b, all, "bv");
-  const inner = { left: r.left + b.l, top: r.top + b.t, right: r.right - b.r, bottom: r.bottom - b.b, width: r.width - b.l - b.r, height: r.height - b.t - b.b };
-  if (p.t || p.r || p.b || p.l) painter.ring("pd", inner, p, all, "pv");
+  // no measure lines, they drowned the page when every element wore them (a quiet form, corner size chips and no values, lived an hour: "çok kötü olmuş")
+  const { r, m } = painter.geometry(el);
+  bands(painter, el);
   painter.box("box", r.left, r.top, r.width, r.height);
   painter.chip(painter.label("", painter.chipParts(el, r, true), 0, 0), r, chrome);
   paintFree(painter, el, r, m);

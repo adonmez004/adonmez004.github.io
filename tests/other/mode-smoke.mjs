@@ -1,0 +1,16 @@
+import { launch, routeInspector, blockFonts, serve } from "../lib/browser.mjs";
+const site = serve(); const browser = await launch();
+const page = await browser.newPage({ viewport: { width: 1280, height: 900 }, deviceScaleFactor: 2 }); const errors = []; page.on("pageerror", (e) => errors.push(e.message));
+await routeInspector(page); await blockFonts(page); await page.goto(site.url, { waitUntil: "networkidle" });
+const host = page.locator("fm-inspector"); const sr = (fn, a) => page.evaluate(fn, a);
+const st = () => sr(() => { const i = document.querySelector("fm-inspector"), sh = i.shadowRoot; return { view: i.view, mode: i.mode[i.view], def: sh.querySelector(".vdefault").getAttribute("aria-pressed") + (sh.querySelector(".vdefault").disabled ? "(disabled)" : ""), all: sh.querySelector(".vall").getAttribute("aria-pressed"), htmlRows: [...sh.querySelectorAll("#view-html .row")].filter((r) => !r.hidden).length, cssHeads: [...sh.querySelectorAll("#view-css .gh .sel")].map((s) => s.textContent).join(" ") }; });
+const at = async (sel) => { const b = await page.locator(sel).boundingBox(); return [b.x + 10, b.y + 8]; };
+await host.locator(".htmlbtn").click(); let [x, y] = await at("h1"); await page.mouse.click(x, y); await page.waitForTimeout(500); console.log("html h1:", JSON.stringify(await st()));
+await host.locator(".vall").click(); await page.waitForTimeout(300); console.log("all:", JSON.stringify(await st()));
+await host.locator(".vdefault").click(); await page.waitForTimeout(300); console.log("default:", JSON.stringify(await st()));
+await page.screenshot({ path: "mode-html.png", clip: { x: 820, y: 0, width: 460, height: 120 } });
+await host.locator(".cssbtn").click(); [x, y] = await at("p"); await page.mouse.click(x, y); await page.waitForTimeout(500); console.log("css p:", JSON.stringify(await st()));
+await host.locator(".vall").click(); await page.waitForTimeout(300); console.log("all:", JSON.stringify(await st()));
+await host.locator(".vdefault").click(); await page.waitForTimeout(300); console.log("default:", JSON.stringify(await st()));
+await page.keyboard.press("Escape"); await host.locator(".htmlbtn").click(); await page.waitForTimeout(200); [x, y] = await at("img"); await page.mouse.click(x, y); await page.waitForTimeout(400); console.log("html img (a new choice shows the element):", JSON.stringify(await st()));
+console.log("errors:", errors); await browser.close(); site.close();

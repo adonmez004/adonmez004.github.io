@@ -1,0 +1,37 @@
+// The resize tool (v0.2: no top bar; the tool's own box opens on the first choice with the first-chosen size, the size now and the signed difference; one tool at a time): arming, the choice swallowing the page click, corner drags, undo through the host's sizeUndo(), the handle kept inside the viewport, Escape, Clear all, the picker and the sizer never standing together
+import { chromium } from "playwright";
+import http from "node:http"; import fs from "node:fs"; import path from "node:path";
+const ROOT = new URL("./site/", import.meta.url).pathname, LOCAL = (process.env.INSPECTOR || new URL("../inspector.js", import.meta.url).pathname);
+const srv = http.createServer((q, r) => { const f = q.url === "/inspector.js" ? LOCAL : path.join(ROOT, q.url === "/" ? "index.html" : q.url); try { r.setHeader("content-type", f.endsWith(".css") ? "text/css" : f.endsWith(".js") ? "text/javascript" : "text/html"); r.end(fs.readFileSync(f)); } catch { r.statusCode = 404; r.end(); } }).listen(0);
+const port = srv.address().port;
+const browser = await chromium.launch();
+const errors = [];
+const page = await browser.newPage({ viewport: { width: 1280, height: 900 } }); page.on("pageerror", (e) => errors.push(e.message));
+await page.goto(`http://127.0.0.1:${port}/`, { waitUntil: "networkidle" });
+const host = page.locator("fm-inspector");
+const sr = (fn, arg) => page.evaluate(fn, arg);
+const st = () => sr(() => { const h = document.querySelector("fm-inspector"), sh = h.shadowRoot; const hd = sh.querySelector(".hd"); const el = h.sizeTarget; const er = el?.getBoundingClientRect(); const hr = hd.getBoundingClientRect(); return { sizing: h.hasAttribute("sizing"), picking: h.hasAttribute("picking"), target: el?.className || null, box: h.hasAttribute("open") ? h.view : "closed", handle: getComputedStyle(hd).display, handleAt: el ? [Math.round(hr.left + hr.width / 2 - er.right), Math.round(hr.top + hr.height / 2 - er.bottom)] : null, val: sh.querySelector(".wval").textContent, now: sh.querySelector(".wnow").textContent, size: el ? [Math.round(er.width), Math.round(er.height)] : null, style: el?.getAttribute("style") ?? null }; });
+const drag = async (dx, dy) => { const b = await host.locator(".hd").boundingBox(); const x = b.x + b.width / 2, y = b.y + b.height / 2; await page.mouse.move(x, y); await page.mouse.down(); for (let i = 1; i <= 5; i++) await page.mouse.move(x + dx * i / 5, y + dy * i / 5); await page.mouse.up(); await page.waitForTimeout(200); };
+await sr(() => { window.btnClicks = 0; document.querySelector(".btn").addEventListener("click", () => window.btnClicks++); });
+await host.locator(".sizebtn").click(); await page.waitForTimeout(100);
+console.log("armed:", JSON.stringify(await st()), "(expect box closed until a choice)");
+const [x, y] = await sr(() => { const r = document.querySelector(".btn").getBoundingClientRect(); return [r.x + 3, r.y + 3]; });
+await page.mouse.click(x, y); await page.waitForTimeout(300);
+let now = await st(); console.log("btn chosen:", JSON.stringify(now), "page click swallowed:", await sr(() => window.btnClicks === 0));
+const before = now.size;
+await drag(60, 30); now = await st(); console.log("corner +60/+30:", now.size, "from", before, "val:", now.val, "now:", now.now, "style:", now.style, "box:", now.box);
+await drag(-20, -10); now = await st(); console.log("corner -20/-10:", now.size, "(expect", [before[0] + 40, before[1]], ": the tool writes the width alone) now:", now.now);
+console.log("the inline size reaches the store:", await sr(() => document.querySelector("fm-inspector").store.inlineNodes.some((n) => n.model.inlineEl?.classList.contains("btn") && /inline-size/.test(n.model.inlineEl.getAttribute("style")))));
+await sr(() => { const h = document.querySelector("fm-inspector"); h.sizeUndo(); h.sizeUndo(); }); await page.waitForTimeout(200); now = await st(); console.log("two undos:", now.size, "(expect", before, ") style:", now.style, "now:", now.now, "handle:", now.handle);
+await drag(50, 0);
+// the full-width card: its corner is past the viewport, the handle waits at the edge
+const [cx, cy] = await sr(() => { const r = document.querySelector(".card").getBoundingClientRect(); return [r.x + 3, r.y + 3]; });
+await page.mouse.click(cx, cy); await page.waitForTimeout(150); now = await st(); console.log("card chosen, handle inside the viewport:", await sr(() => { const r = document.querySelector("fm-inspector").shadowRoot.querySelector(".hd").getBoundingClientRect(); return r.right <= innerWidth && r.bottom <= innerHeight; }), "target", now.target, "val:", now.val);
+await drag(-100, 0); now = await st(); console.log("card corner -100:", now.size, "style:", now.style);
+await page.keyboard.press("Escape"); await page.waitForTimeout(150); now = await st(); console.log("Escape:", JSON.stringify((({ sizing, box, handle, val }) => ({ sizing, box, handle, val }))(now)), "btn keeps its size:", await sr(() => Math.round(document.querySelector(".btn").getBoundingClientRect().width)), "(expect", before[0] + 50, ")");
+await host.locator(".reset").click(); await page.waitForTimeout(400); console.log("Clear all:", await sr(() => [Math.round(document.querySelector(".btn").getBoundingClientRect().width), document.querySelector(".btn").getAttribute("style"), document.querySelector(".card").getAttribute("style")]), "(expect", before[0], "null null)");
+await host.locator(".sizebtn").click(); await host.locator(".pickbtn").click(); await page.waitForTimeout(100); now = await st(); console.log("picker after sizer:", now.sizing, now.picking, "(expect false true: one tool at a time since v0.2)");
+await host.locator(".sizebtn").click(); await page.waitForTimeout(100); now = await st(); console.log("sizer after picker:", now.sizing, now.picking, "(expect true false)");
+await page.keyboard.press("Escape");
+console.log("errors:", JSON.stringify(errors));
+await browser.close(); srv.close();

@@ -1,0 +1,15 @@
+import { launch, routeInspector, serve } from "../lib/browser.mjs";
+const html = `<!doctype html><html><head><meta charset="utf-8"><style id="s">#dup2 { color: red !important; color: blue; }</style></head><body><main><p id="dup2">dup2</p></main><script defer src="https://demo.frontendmentorsolutions.io/inspector.js"></script></body></html>`;
+const site = serve(html); const browser = await launch(); const page = await browser.newPage();
+await routeInspector(page); await page.goto(site.url, { waitUntil: "networkidle" });
+const host = page.locator("fm-inspector"); await host.locator(".fab").click(); await page.waitForTimeout(500); await host.locator('[role="tab"]', { hasText: /css/i }).first().click(); await page.waitForTimeout(400);
+const rows = (label) => page.evaluate((label) => { const i = document.querySelector("fm-inspector"); const m = i.store.models.find((m) => m.selector === "#dup2"); return `${label}: dirty=${i.store.dirtyModels.has(m)} live="${m.rule.style.cssText}" decls=${JSON.stringify(m.decls.filter((d) => d.type === "decl").map((d) => `${d.prop}:${d.value}${d.important ? "!" : ""}${d.on ? "" : "(off)"}${d.live ? "" : "(na)"}`))}`; }, label);
+const untick = () => page.evaluate(() => { const i = document.querySelector("fm-inspector"); const m = i.store.models.find((m) => m.selector === "#dup2"); const d = m.decls.find((d) => d.prop === "color" && d.important); const before = i.state(d); d.on = false; i.apply(d); i.record([{ d, before, after: i.state(d) }]); });
+await page.evaluate(() => { const i = document.querySelector("fm-inspector"); const st = i.store; const orig = st.reconcileModel.bind(st); window.__log = []; st.reconcileModel = (m) => { const before = m.decls.filter((d) => d.type === "decl").map((d) => `${d.prop}:${d.value}${d.on ? "" : "(off)"}`); orig(m); window.__log.push(`reconcile dirty=${st.dirtyModels.has(m)} live="${m.rule.style.cssText}" before=${JSON.stringify(before)} after=${JSON.stringify(m.decls.filter((d) => d.type === "decl").map((d) => `${d.prop}:${d.value}${d.on ? "" : "(off)"}`))} from=${new Error().stack.split("\n").slice(2, 4).map((l) => l.trim().slice(0, 40)).join(" < ")}`); }; });
+console.log(await rows("start"));
+await untick(); console.log(await rows("red off"));
+await page.evaluate(() => { [...document.getElementById("s").sheet.cssRules][0].style.setProperty("background", "yellow"); }); await page.waitForTimeout(1300);
+console.log(await rows("page added background, polled"));
+await page.evaluate(() => document.querySelector("fm-inspector").reset()); console.log(await rows("reset (sync)")); await page.waitForTimeout(1300); console.log(await rows("reset, polled"));
+await untick(); console.log(await rows("red off again"));
+console.log((await page.evaluate(() => window.__log)).join("\n")); await browser.close(); site.close();
